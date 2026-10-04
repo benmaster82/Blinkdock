@@ -20,10 +20,13 @@ from PySide6.QtNetwork import QLocalServer, QLocalSocket
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon, QWidget
 
 from config import (DEFAULT_STATE, STATES, load_settings, load_terminal_hwnd,
-                    save_settings, status_path)
+                    save_settings, sessions_dir)
+from hook_bridge import write_session
 from winfocus import find_terminals, raise_hwnd, raise_window
 
 SINGLE_INSTANCE_KEY = 'claude-island-single-instance'
+# When several sessions run at once, the island shows the most urgent one.
+PRIORITY = {'offline': 0, 'idle': 1, 'done': 2, 'working': 3, 'error': 4, 'waiting': 5}
 
 ASSETS = Path(__file__).with_name('assets')
 COLLAPSED = (132, 52)
@@ -51,15 +54,15 @@ class Island(QWidget):
         self.settings = load_settings()
         self.state = DEFAULT_STATE
         self.detail = ''
+        self._applied: tuple | None = None
         self._expand = 0.0
         self._pulse = 0.0
         self._center_x: float | None = self.settings['center_x']
         self._drag_offset: QPointF | None = None
         self._press_pos: QPointF | None = None
         self._moved = False
-        self._status_file = status_path()
-        self._last_stamp = ''
-        self._updated_wall = time.monotonic()
+        self._sessions_dir = sessions_dir()
+        self._waiting_ids: set[str] = set()
 
         self.avatar = self._load_avatar()
 
@@ -73,13 +76,9 @@ class Island(QWidget):
         self._pulse_anim.setKeyValueAt(1.0, 0.0)
         self._pulse_anim.setEasingCurve(QEasingCurve.InOutSine)
 
-        self._idle_timer = QTimer(self)
-        self._idle_timer.setSingleShot(True)
-        self._idle_timer.timeout.connect(lambda: self.set_state('idle'))
-
         self._poll = QTimer(self)
         self._poll.setInterval(150)
-        self._poll.timeout.connect(self._read_status)
+        self._poll.timeout.connect(self._read_sessions)
         self._poll.start()
 
         self._apply_geometry()
@@ -154,34 +153,30 @@ class Island(QWidget):
     def set_state(self, state: str, detail: str = '', animate: bool = True) -> None:
         if state not in STATES:
             state = 'idle'
-        entering_waiting = state == 'waiting' and self.state != 'waiting'
+        if (state, detail) == self._applied:
+            return  # polled every 150 ms: only react when something actually changed
+        changed_state = self._applied is None or state != self.state
         self.state, self.detail = state, detail
-        self._updated_wall = time.monotonic()
+        self._applied = (state, detail)
         spec = STATES[state]
-        if entering_waiting and self.settings.get('chime', True):
-            self._chime()
 
-        target = 1.0 if spec['expanded'] else 0.0
-        if animate:
-            self._expand_anim.stop()
-            opening = target > self._expand
-            self._expand_anim.setEasingCurve(QEasingCurve.OutBack if opening else QEasingCurve.InOutCubic)
-            self._expand_anim.setStartValue(self._expand)
-            self._expand_anim.setEndValue(target)
-            self._expand_anim.start()
-        else:
-            self._set_expand(target)
-
-        if spec['pulse']:
-            if self._pulse_anim.state() != QPropertyAnimation.Running:
-                self._pulse_anim.start()
-        else:
-            self._pulse_anim.stop()
-            self._set_pulse(0.0)
-
-        self._idle_timer.stop()
-        if spec['auto_idle']:
-            self._idle_timer.start(int(spec['auto_idle'] * 1000))
+        if changed_state:
+            target = 1.0 if spec['expanded'] else 0.0
+            if animate:
+                self._expand_anim.stop()
+                opening = target > self._expand
+                self._expand_anim.setEasingCurve(QEasingCurve.OutBack if opening else QEasingCurve.InOutCubic)
+                self._expand_anim.setStartValue(self._expand)
+                self._expand_anim.setEndValue(target)
+                self._expand_anim.start()
+            else:
+                self._set_expand(target)
+            if spec['pulse']:
+                if self._pulse_anim.state() != QPropertyAnimation.Running:
+                    self._pulse_anim.start()
+            else:
+                self._pulse_anim.stop()
+                self._set_pulse(0.0)
         self.update()
 
     def _chime(self) -> None:
@@ -193,23 +188,53 @@ class Island(QWidget):
         except (ImportError, RuntimeError):
             pass
 
-    def _read_status(self) -> None:
-        try:
-            raw = self._status_file.read_text(encoding='utf-8')
-            data = json.loads(raw)
-        except (OSError, ValueError, TypeError):
-            data = None
-        if isinstance(data, dict):
-            stamp = f'{data.get("state")}|{data.get("detail")}|{data.get("ts")}'
-            if stamp != self._last_stamp:
-                self._last_stamp = stamp
-                self.set_state(str(data.get('state', 'idle')), str(data.get('detail', '')))
-                return
-        # Stuck-session guard: a session that died without SessionEnd leaves the
-        # file reading 'working' forever. Decay to idle after a quiet spell.
+    def _load_sessions(self) -> list[dict]:
+        now = time.time()
         timeout = float(self.settings.get('working_timeout', 240))
-        if self.state == 'working' and time.monotonic() - self._updated_wall > timeout:
-            self.set_state('idle')
+        sessions = []
+        for file in self._sessions_dir.glob('*.json'):
+            try:
+                data = json.loads(file.read_text(encoding='utf-8'))
+            except (OSError, ValueError, TypeError):
+                continue
+            if not isinstance(data, dict):
+                continue
+            ts = float(data.get('ts', 0) or 0)
+            if now - ts > 3600:  # forget long-abandoned sessions
+                file.unlink(missing_ok=True)
+                continue
+            state = str(data.get('state', 'idle'))
+            if state not in STATES:
+                state = 'idle'
+            age = now - ts
+            if state == 'working' and age > timeout:
+                state = 'idle'  # a session gone silent is no longer busy (stuck guard)
+            elif state == 'done' and age > STATES['done']['auto_idle']:
+                state = 'idle'  # the green flash has passed
+            sessions.append({'id': file.stem, 'state': state,
+                             'detail': str(data.get('detail', '')),
+                             'project': str(data.get('project', '')), 'ts': ts})
+        return sessions
+
+    def _read_sessions(self) -> None:
+        sessions = self._load_sessions()
+
+        waiting_now = {s['id'] for s in sessions if s['state'] == 'waiting'}
+        if (waiting_now - self._waiting_ids) and self.settings.get('chime', True):
+            self._chime()  # a new session just started waiting for you
+        self._waiting_ids = waiting_now
+
+        active = [s for s in sessions if s['state'] != 'offline']
+        if not active:
+            self.set_state('offline')
+            return
+        winner = max(active, key=lambda s: (PRIORITY[s['state']], s['ts']))
+        pieces = [p for p in (winner['project'], winner['detail']) if p]
+        text = ' · '.join(pieces)
+        others = len(active) - 1
+        if others:
+            text = (text + ' ' if text else '') + f'(+{others})'
+        self.set_state(winner['state'], text)
 
     # --- painting ------------------------------------------------------------
     def _load_avatar(self) -> QPixmap | None:
@@ -335,7 +360,7 @@ class Island(QWidget):
         menu = QMenu()
         for state in STATES:
             action = QAction('Simulate: ' + STATES[state]['label'], menu)
-            action.triggered.connect(lambda _=False, s=state: self.set_state(s))
+            action.triggered.connect(lambda _=False, s=state: write_session(s, '', '_sim', 'simulate'))
             menu.addAction(action)
         menu.addSeparator()
         quit_action = QAction('Quit', menu)

@@ -5,10 +5,10 @@ docked to the top of the screen: it stays small and calm while Claude works and
 **expands** to get your attention when Claude is waiting for input, has finished,
 or hit an error — even if the terminal is in the background.
 
-The island is a pure **renderer**: it never talks to Claude. It polls a small JSON
-status file that **Claude Code hooks** write through `hook_bridge.py`. So Claude
-runs in its own terminal, you work there normally, and the island reflects what
-happens. The `claude` command itself is never modified.
+The island is a pure **renderer**: it never talks to Claude. It polls a small set
+of per-session JSON files that **Claude Code hooks** write through `hook_bridge.py`.
+So Claude runs in its own terminal, you work there normally, and the island
+reflects what happens. The `claude` command itself is never modified.
 
 ---
 
@@ -19,22 +19,22 @@ happens. The `claude` command itself is never modified.
    │  frameless · always-on-top · top-centre · pill    │
    │  non-activating (never steals keyboard focus)     │
    └───────────────────────▲───────────────────────────┘
-                           │ polls (every 150 ms)
-                  ┌────────┴─────────┐
-                  │  status.json     │  {"state", "detail", "ts"}
-                  └────────▲─────────┘
+                           │ polls (every 150 ms), aggregates all sessions
+                  ┌────────┴──────────────┐
+                  │  sessions/<id>.json   │  one file per session
+                  └────────▲──────────────┘  {"state","detail","project","ts"}
                            │ atomic write, one event → one state
                   ┌────────┴─────────┐
                   │  hook_bridge.py  │  ← invoked by Claude Code hooks
                   └────────▲─────────┘
                            │ configured once in settings.json
                   ┌────────┴─────────┐
-                  │   Claude Code    │  runs anywhere, you work as usual
+                  │   Claude Code    │  one or more sessions, you work as usual
                   └──────────────────┘
 ```
 
 The island and the hook bridge share `config.py`, so they always agree on the
-status-file path and the set of states.
+sessions directory and the set of states.
 
 ---
 
@@ -128,8 +128,8 @@ use Claude Code. Behaviour that makes it a tool, not a demo:
 | File | Role |
 | --- | --- |
 | `island.py` | The pill (PySide6): morph, pulse, status polling, tray icon, mouse/click handling, single-instance guard |
-| `hook_bridge.py` | Invoked by the hooks: maps one lifecycle event to one state and atomically writes `status.json` |
-| `config.py` | Shared: status-file path, state vocabulary, settings load/save, recorded terminal handle |
+| `hook_bridge.py` | Invoked by the hooks: maps one lifecycle event to one state and atomically writes that session's file |
+| `config.py` | Shared: sessions directory, state vocabulary, settings load/save, recorded terminal handle |
 | `winfocus.py` | Find and raise the Claude terminal by window handle / class / title (Windows-only) |
 | `install_hooks.py` | Generate / install / remove the Claude Code hooks in a `settings.json` |
 | `install_autostart.py` | Enable / disable launch at login (per-user `Run` key, no admin) |
@@ -210,9 +210,28 @@ User preferences live in `%LOCALAPPDATA%\claude-island\settings.json`:
 
 Other files under `%LOCALAPPDATA%\claude-island\`:
 
-- `status.json` — the live state (override its path with the `CLAUDE_ISLAND_STATUS`
-  environment variable).
+- `sessions\<session_id>.json` — one live state file per Claude session.
 - `terminal.json` — the recorded terminal window handle, if any.
+
+---
+
+## Multiple sessions
+
+Each Claude Code session (keyed by its `session_id`) writes its own file in the
+`sessions` directory, so parallel sessions never clobber each other. The island
+reads them all every tick and shows the **most urgent** one, by priority:
+
+```
+waiting  >  error  >  working  >  done  >  idle
+```
+
+So if one session is working and another is waiting for you, the island goes
+amber for the waiting one. It labels the pill with that session's **project**
+(the working directory's name) and appends `(+N)` when other sessions are also
+active. The chime fires whenever a *new* session starts waiting, even if the
+island was already amber for another. Per-session decay still applies: a session
+silent past `working_timeout` drops to `idle`, a `done` one collapses after its
+flash, and files abandoned for over an hour are pruned.
 
 ---
 
@@ -247,9 +266,9 @@ autostart, and stops the island. The `claude` command is never affected.
 
 - **Single agent (Claude Code).** Codex and other agents have no equivalent hooks;
   they would need a coarser state (running / stopped) or a wrapped process.
-- **One shared status file.** With two Claude sessions at once, the latest event
-  wins. A planned refinement lets `waiting` win and shows which project it came
-  from.
+- **One terminal recorded for click-to-focus.** With several sessions, clicking
+  the island raises the recorded/top Windows Terminal, not necessarily the exact
+  session shown. Per-session focus is a possible refinement.
 - **`working` is one level.** Finer detail ("runs a command", "edits a file")
   comes from `PreToolUse` only when stdin is available to the hook.
 - **Windows only.** Window focus, autostart, the chime, and the launcher are

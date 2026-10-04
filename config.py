@@ -31,17 +31,16 @@ def _base_dir() -> Path:
     return base
 
 
-def status_path() -> Path:
-    """The JSON file the hook bridge writes and the island polls.
+def sessions_dir() -> Path:
+    """Directory of per-session status files — one JSON per Claude session.
 
-    Override with CLAUDE_ISLAND_STATUS to run several islands or redirect it.
+    Each session writes its own file (keyed by session id), so concurrent
+    sessions never clobber a shared file; the island aggregates them, letting
+    `waiting` win (see island.py).
     """
-    override = os.environ.get('CLAUDE_ISLAND_STATUS')
-    if override:
-        path = Path(override)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        return path
-    return _base_dir() / 'status.json'
+    path = _base_dir() / 'sessions'
+    path.mkdir(parents=True, exist_ok=True)
+    return path
 
 
 # User preferences the island remembers between runs.

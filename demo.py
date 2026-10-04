@@ -5,7 +5,7 @@ Run `python island.py` in one terminal and `python demo.py` in another.
 from __future__ import annotations
 import time
 
-from hook_bridge import write_status
+from hook_bridge import write_session
 
 SEQUENCE = [
     ('idle', '', 2.5),
@@ -25,11 +25,11 @@ def main() -> None:
     try:
         while True:
             for state, detail, hold in SEQUENCE:
-                write_status(state, detail)
+                write_session(state, detail, 'demo', 'demo-project')
                 print(f'  {state:8} {detail}')
                 time.sleep(hold)
     except KeyboardInterrupt:
-        write_status('offline')
+        write_session('offline', session_id='demo')
         print('\nDemo stopped.')
 
 
