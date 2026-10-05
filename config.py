@@ -17,12 +17,30 @@ STATES: dict[str, dict] = {
     'offline': {'accent': '#5b6472', 'label': 'offline',       'expanded': False, 'pulse': False, 'auto_idle': 0},
     'idle':    {'accent': '#6b7686', 'label': 'listening',     'expanded': False, 'pulse': False, 'auto_idle': 0},
     'working': {'accent': '#5aa0f2', 'label': 'working',       'expanded': False, 'pulse': True,  'auto_idle': 0},
+    'background': {'accent': '#4ebbb7', 'label': 'background work', 'expanded': True, 'pulse': True, 'auto_idle': 0},
     'waiting': {'accent': '#f2b705', 'label': 'waiting for you', 'expanded': True, 'pulse': True, 'auto_idle': 0},
     'done':    {'accent': '#35c488', 'label': 'done',          'expanded': True,  'pulse': False, 'auto_idle': 3},
     'error':   {'accent': '#ef5350', 'label': 'error',         'expanded': True,  'pulse': False, 'auto_idle': 0},
+    'unknown': {'accent': '#a8adb7', 'label': 'status unknown', 'expanded': True, 'pulse': False, 'auto_idle': 0},
 }
 
 DEFAULT_STATE = 'offline'
+
+# Informational notifications are intentionally absent.
+NOTIFICATION_STATES = {
+    'permission_prompt': 'waiting',
+    'elicitation_dialog': 'waiting',
+    'elicitation_url_dialog': 'waiting',
+    'agent_needs_input': 'waiting',
+    'quota_auto_resume_stale': 'waiting',
+    'elicitation_complete': 'working',
+    'elicitation_response': 'working',
+    'quota_auto_resume_fired': 'working',
+    'quota_auto_resume_disabled': 'error',
+}
+ACTIONABLE_NOTIFICATIONS = tuple(
+    kind for kind, state in NOTIFICATION_STATES.items() if state == 'waiting'
+)
 
 
 def _base_dir() -> Path:
@@ -48,7 +66,7 @@ DEFAULT_SETTINGS = {
     'center_x': None,       # horizontal centre in pixels; None = centre of screen
     'top_margin': 12,       # distance from the top of the work area
     'chime': True,          # soft sound when Claude starts waiting for you
-    'working_timeout': 240, # seconds of silence before 'working' decays to 'idle'
+    'working_timeout': 240, # seconds of silence before 'working' becomes 'unknown'
     'focus_title': 'Claude Code', # click raises the first window whose title contains this
 }
 

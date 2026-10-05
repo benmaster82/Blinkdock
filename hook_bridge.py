@@ -17,7 +17,7 @@ import time
 import uuid
 from pathlib import Path
 
-from config import STATES, sessions_dir
+from config import NOTIFICATION_STATES, STATES, sessions_dir
 
 
 def safe_id(session_id: str) -> str:
@@ -40,6 +40,9 @@ def read_event() -> dict:
 
 
 def detail_for(state: str, event: dict) -> str:
+    if state == 'background':
+        count = len(event.get('background_tasks') or [])
+        return f'{count} task' + ('s' if count != 1 else '')
     if state == 'working':
         tool = event.get('tool_name') or event.get('tool') or ''
         labels = {'Bash': 'running a command', 'Edit': 'editing a file',
@@ -47,9 +50,26 @@ def detail_for(state: str, event: dict) -> str:
                   'Grep': 'searching the code', 'Glob': 'finding files',
                   'WebFetch': 'fetching the web', 'Task': 'coordinating a subagent'}
         return labels.get(tool, tool)
-    if state in ('waiting', 'error'):
-        return str(event.get('message', ''))[:200]
+    if state == 'waiting':
+        return str(event.get('message') or event.get('tool_name') or event.get('mcp_server_name') or '')[:200]
+    if state == 'error':
+        return str(event.get('error') or event.get('message') or '').replace('_', ' ')[:200]
     return ''
+
+
+def state_for_event(state: str, event: dict) -> str | None:
+    if 'notification_type' in event or event.get('hook_event_name') == 'Notification':
+        notification_type = event.get('notification_type')
+        return NOTIFICATION_STATES.get(notification_type) if isinstance(notification_type, str) else None
+    if state == 'waiting' and event and not event.get('hook_event_name'):
+        return None
+    if event.get('hook_event_name') == 'PermissionRequest' and event.get('agent_id'):
+        return None  # background subagents cannot always present a user prompt
+    if event.get('hook_event_name') == 'PostToolUseFailure' and event.get('is_interrupt') is True:
+        return 'unknown'
+    if state == 'done' and event.get('background_tasks'):
+        return 'background'
+    return state
 
 
 def write_session(state: str, detail: str = '', session_id: str = 'default', project: str = '') -> None:
@@ -69,6 +89,9 @@ def write_session(state: str, detail: str = '', session_id: str = 'default', pro
 def main() -> None:
     state = sys.argv[1] if len(sys.argv) > 1 else 'idle'
     event = read_event()
+    state = state_for_event(state, event)
+    if state is None:
+        return
     session_id = str(event.get('session_id') or 'default')
     cwd = str(event.get('cwd') or '')
     project = Path(cwd).name if cwd else ''

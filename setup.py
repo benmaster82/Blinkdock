@@ -77,10 +77,13 @@ def main() -> None:
     if sys.platform != 'win32':
         print('This setup is for Windows only.')
         return
-    if len(sys.argv) > 1 and sys.argv[1].lower() in ('uninstall', 'off', 'remove'):
-        uninstall()
-    else:
-        install()
+    try:
+        if len(sys.argv) > 1 and sys.argv[1].lower() in ('uninstall', 'off', 'remove'):
+            uninstall()
+        else:
+            install()
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
 
 
 if __name__ == '__main__':

@@ -11,12 +11,14 @@ SEQUENCE = [
     ('idle', '', 2.5),
     ('working', 'reading a file', 2.0),
     ('working', 'running a command', 2.5),
+    ('background', '1 task', 2.5),
     ('waiting', 'May I run npm test?', 4.0),
     ('working', 'editing a file', 2.5),
     ('done', '', 3.0),
     ('idle', '', 2.5),
     ('working', 'searching the code', 2.0),
     ('error', 'Command interrupted', 3.5),
+    ('unknown', 'No recent event', 3.5),
 ]
 
 

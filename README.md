@@ -44,13 +44,16 @@ sessions directory and the set of states.
 | --- | --- | --- |
 | `offline` | grey, collapsed | `SessionEnd` |
 | `idle` | dim, collapsed | `SessionStart` (ready, listening) |
-| `working` | blue ring, breathing | `UserPromptSubmit`, `PreToolUse` |
-| `waiting` | **expanded**, amber, pulsing, chime | `Notification` (needs input or permission) |
-| `done` | **expanded** green, then collapses | `Stop` (response complete) |
-| `error` | **expanded** red | reserved (interrupted turn) |
+| `working` | blue ring, breathing | prompt, tool activity, or resumed work |
+| `background` | **expanded**, teal | `Stop` with background tasks still running |
+| `waiting` | **expanded**, amber, pulsing, chime | permission, MCP input, or another user action |
+| `done` | **expanded** green, then collapses | `Stop` with no background tasks |
+| `error` | **expanded** red | `StopFailure` or a disabled quota resume |
+| `unknown` | **expanded**, grey | no fresh event for a prolonged period |
 
 The elastic open/close morph (collapsed ↔ expanded) and the breathing ring are
-driven by `QPropertyAnimation`. `done` auto-reverts to `idle` after 3 seconds.
+driven by `QPropertyAnimation`. Compact states keep a short text label visible.
+`done` auto-reverts to `idle` after 3 seconds.
 
 ---
 
@@ -115,10 +118,12 @@ use Claude Code. Behaviour that makes it a tool, not a demo:
   (toggle with the `chime` key in `settings.json`).
 - **Click the island → the Claude terminal comes to the front** (see
   *Click-to-focus* below).
+- **Click the number on the island → inspect all tracked sessions**, each with
+  its project, state, and time since the last observed event.
 - **Single instance**: re-launching never creates a second island.
 - **Stuck-session guard**: if a session dies without a `SessionEnd`, the island
-  decays from `working` back to `idle` after a quiet spell (`working_timeout`,
-  default 240 s) instead of staying stuck on "working".
+  changes from `working` to `unknown` after a quiet spell (`working_timeout`,
+  default 240 s). It does not claim the session is idle without evidence.
 - **Remembered position** across restarts.
 
 ---
@@ -151,9 +156,20 @@ use Claude Code. Behaviour that makes it a tool, not a demo:
 | `SessionStart` | `idle` |
 | `UserPromptSubmit` | `working` |
 | `PreToolUse` | `working` (with the tool name as detail when available) |
-| `Notification` | `waiting` |
-| `Stop` | `done` |
+| `PostToolUse`, `PostToolUseFailure` | `working` after a tool result; an interrupted tool becomes `unknown` |
+| `PermissionRequest` | `waiting` immediately for a foreground permission request |
+| `PermissionDenied` | `working` after an auto-mode denial |
+| `Elicitation`, `ElicitationResult` | `waiting`, then `working` for MCP input |
+| `Notification` | `waiting`, `working`, or `error` according to its type |
+| `Stop` | `done`, or `background` if tasks are still running |
+| `StopFailure` | `error` for an API failure |
 | `SessionEnd` | `offline` |
+
+The `Notification` hooks use type matchers. Permission, MCP input, background
+agent input, and stale quota resume requests show `waiting`. Elicitation completion
+and quota auto-resume return to `working`; a disabled quota resume shows `error`.
+Informational notifications such as `idle_prompt` and `auth_success` are ignored.
+After updating an existing installation, re-run `Install.cmd` to refresh the hooks.
 
 Manual control:
 
@@ -166,16 +182,18 @@ python install_hooks.py remove <settings.json>        # strip only the island's 
 Typical targets: `%USERPROFILE%\.claude\settings.json` (all sessions) or
 `<project>\.claude\settings.json` (one project).
 
-`hook_bridge.py` also reads the event JSON that Claude Code passes on stdin; for
-`PreToolUse` it turns the tool name into a readable detail (e.g. "runs a command",
-"edits a file"). Under `pythonw`, stdin may be unavailable — in that case the
-state still updates, only the extra detail is dropped.
+`hook_bridge.py` reads the event JSON that Claude Code passes on stdin. It uses
+`session_id` to keep sessions separate, `notification_type` to verify a matched
+notification, and error codes for the red state. On this Windows setup, a piped
+payload reaches `pythonw`; if stdin is unavailable elsewhere, the installed
+matchers still select notification states but session labels fall back to defaults.
 
 ---
 
 ## Click-to-focus
 
-Clicking the island raises the terminal Claude runs in. Window titles are
+Clicking the body of the island raises the terminal Claude runs in; clicking the
+session count opens the session list. Window titles are
 unreliable (Claude rewrites the tab title to your first prompt), so matching is
 layered, most precise first:
 
@@ -205,13 +223,14 @@ User preferences live in `%LOCALAPPDATA%\claude-island\settings.json`:
 | `center_x` | `null` | Horizontal centre in pixels; `null` = centre of the screen. Updated when you drag. |
 | `top_margin` | `12` | Distance from the top of the work area, in pixels. |
 | `chime` | `true` | Soft sound when Claude starts waiting for you. |
-| `working_timeout` | `240` | Seconds of silence before `working` decays to `idle`. |
+| `working_timeout` | `240` | Seconds of silence before `working` becomes `unknown`. |
 | `focus_title` | `Claude Code` | Fallback title substring for click-to-focus. |
 
 Other files under `%LOCALAPPDATA%\claude-island\`:
 
 - `sessions\<session_id>.json` — one live state file per Claude session.
 - `terminal.json` — the recorded terminal window handle, if any.
+- `settings.lock` — held while the island runs to prevent duplicate instances.
 
 ---
 
@@ -222,16 +241,21 @@ Each Claude Code session (keyed by its `session_id`) writes its own file in the
 reads them all every tick and shows the **most urgent** one, by priority:
 
 ```
-waiting  >  error  >  working  >  done  >  idle
+waiting  >  error  >  working  >  done  >  background  >  unknown  >  idle
 ```
 
 So if one session is working and another is waiting for you, the island goes
 amber for the waiting one. It labels the pill with that session's **project**
-(the working directory's name) and appends `(+N)` when other sessions are also
-active. The chime fires whenever a *new* session starts waiting, even if the
-island was already amber for another. Per-session decay still applies: a session
-silent past `working_timeout` drops to `idle`, a `done` one collapses after its
-flash, and files abandoned for over an hour are pruned.
+(the working directory's name). A dedicated number shows how many sessions are
+tracked; click it for a status list sorted by urgency. `unknown` sessions still
+appear in the count but are clearly marked because their activity cannot be
+confirmed. The chime fires whenever a *new* session starts waiting, even if the
+island was already amber for another. A silent `working` session becomes
+`unknown` after `working_timeout`; `waiting`, `error`, and `background` become
+`unknown` after an hour, as does an inactive `idle` session. A `done` flash
+returns to `idle` after three seconds. Session files are retained until
+`SessionEnd`; the tray and right-click menus offer **Forget inactive sessions**
+for sessions without an event for over an hour.
 
 ---
 
@@ -271,5 +295,11 @@ autostart, and stops the island. The `claude` command is never affected.
   session shown. Per-session focus is a possible refinement.
 - **`working` is one level.** Finer detail ("runs a command", "edits a file")
   comes from `PreToolUse` only when stdin is available to the hook.
+- **Interrupts and manual permission denial.** Claude Code does not emit a
+  corresponding completion hook for every such action. The island updates on the
+  next observed event; otherwise it eventually shows `unknown`.
+- **Background completion.** A `Stop` payload can report outstanding tasks, but
+  later completion notifications do not identify the full remaining task set.
+  A silent background state eventually becomes `unknown`.
 - **Windows only.** Window focus, autostart, the chime, and the launcher are
   Windows-specific; the island renders elsewhere but those features no-op.

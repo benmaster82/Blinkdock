@@ -3,35 +3,38 @@
 A frameless, always-on-top pill docked to the top of the screen. It stays small
 and calm while Claude works and expands to tap you on the shoulder when Claude is
 waiting for input, has finished, or hit an error. State is driven entirely by a
-JSON status file (written by hook_bridge.py), so the island itself is a pure
+per-session JSON status files (written by hook_bridge.py), so the island itself is a pure
 renderer and never talks to Claude directly.
 """
 from __future__ import annotations
 import json
+import math
 import sys
 import time
 from pathlib import Path
 
-from PySide6.QtCore import (Property, QEasingCurve, QPointF, QPropertyAnimation,
-                            QRectF, Qt, QTimer)
+from PySide6.QtCore import (Property, QEasingCurve, QLockFile, QPoint, QPointF,
+                            QPropertyAnimation, QRectF, Qt, QTimer)
 from PySide6.QtGui import (QAction, QColor, QFont, QFontMetrics, QIcon, QPainter,
                            QPainterPath, QPixmap)
-from PySide6.QtNetwork import QLocalServer, QLocalSocket
-from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon, QWidget
+from PySide6.QtWidgets import (QApplication, QHBoxLayout, QLabel, QMenu,
+                               QSystemTrayIcon, QVBoxLayout, QWidget, QWidgetAction)
 
 from config import (DEFAULT_STATE, STATES, load_settings, load_terminal_hwnd,
-                    save_settings, sessions_dir)
+                    save_settings, sessions_dir, settings_path)
 from hook_bridge import write_session
 from winfocus import find_terminals, raise_hwnd, raise_window
 
-SINGLE_INSTANCE_KEY = 'claude-island-single-instance'
 # When several sessions run at once, the island shows the most urgent one.
-PRIORITY = {'offline': 0, 'idle': 1, 'done': 2, 'working': 3, 'error': 4, 'waiting': 5}
+PRIORITY = {'offline': 0, 'idle': 1, 'unknown': 2, 'background': 3,
+            'done': 4, 'working': 5, 'error': 6, 'waiting': 7}
 
 ASSETS = Path(__file__).with_name('assets')
-COLLAPSED = (132, 52)
+COLLAPSED = (174, 52)
 EXPANDED = (332, 60)
 TOP_MARGIN = 12
+BADGE_WIDTH = 32
+BADGE_HEIGHT = 24
 
 
 def lerp(a: float, b: float, t: float) -> float:
@@ -41,6 +44,16 @@ def lerp(a: float, b: float, t: float) -> float:
 def clamp01(value: float) -> float:
     # Elastic easing (OutBack) and the pulse can overshoot past 1.0; alpha must not.
     return max(0.0, min(1.0, value))
+
+
+def effective_state(state: str, age: float, working_timeout: float) -> str:
+    if state == 'done' and age > STATES['done']['auto_idle']:
+        state = 'idle'
+    if state == 'working' and age > working_timeout:
+        return 'unknown'
+    if state in ('idle', 'waiting', 'error', 'background') and age > 3600:
+        return 'unknown'
+    return state
 
 
 class Island(QWidget):
@@ -63,6 +76,9 @@ class Island(QWidget):
         self._moved = False
         self._sessions_dir = sessions_dir()
         self._waiting_ids: set[str] = set()
+        self._sessions_snapshot: list[dict] = []
+        self._session_count = 0
+        self._sessions_menu: QMenu | None = None
 
         self.avatar = self._load_avatar()
 
@@ -95,6 +111,9 @@ class Island(QWidget):
         self._toggle_action = QAction('Hide', menu)
         self._toggle_action.triggered.connect(self.toggle_visibility)
         menu.addAction(self._toggle_action)
+        forget_action = QAction('Forget inactive sessions', menu)
+        forget_action.triggered.connect(self.forget_inactive_sessions)
+        menu.addAction(forget_action)
         quit_action = QAction('Quit', menu)
         quit_action.triggered.connect(QApplication.instance().quit)
         menu.addAction(quit_action)
@@ -116,6 +135,17 @@ class Island(QWidget):
             self.show()
             self.raise_()
             self._toggle_action.setText('Hide')
+
+    def forget_inactive_sessions(self) -> None:
+        cutoff = time.time() - 3600
+        for file in self._sessions_dir.glob('*.json'):
+            try:
+                ts = float(json.loads(file.read_text(encoding='utf-8')).get('ts', 0))
+            except (OSError, ValueError, TypeError, AttributeError):
+                continue
+            if math.isfinite(ts) and ts < cutoff:
+                file.unlink(missing_ok=True)
+        self._read_sessions()
 
     # --- animated properties -------------------------------------------------
     def _get_expand(self) -> float:
@@ -153,11 +183,11 @@ class Island(QWidget):
     def set_state(self, state: str, detail: str = '', animate: bool = True) -> None:
         if state not in STATES:
             state = 'idle'
-        if (state, detail) == self._applied:
+        if (state, detail, self._session_count) == self._applied:
             return  # polled every 150 ms: only react when something actually changed
         changed_state = self._applied is None or state != self.state
         self.state, self.detail = state, detail
-        self._applied = (state, detail)
+        self._applied = (state, detail, self._session_count)
         spec = STATES[state]
 
         if changed_state:
@@ -190,7 +220,12 @@ class Island(QWidget):
 
     def _load_sessions(self) -> list[dict]:
         now = time.time()
-        timeout = float(self.settings.get('working_timeout', 240))
+        try:
+            timeout = float(self.settings.get('working_timeout', 240))
+            if not math.isfinite(timeout) or timeout <= 0:
+                raise ValueError('invalid working timeout')
+        except (TypeError, ValueError):
+            timeout = 240.0
         sessions = []
         for file in self._sessions_dir.glob('*.json'):
             try:
@@ -199,18 +234,17 @@ class Island(QWidget):
                 continue
             if not isinstance(data, dict):
                 continue
-            ts = float(data.get('ts', 0) or 0)
-            if now - ts > 3600:  # forget long-abandoned sessions
-                file.unlink(missing_ok=True)
+            try:
+                ts = float(data.get('ts', 0) or 0)
+            except (TypeError, ValueError):
                 continue
+            if not math.isfinite(ts):
+                continue
+            age = max(0.0, now - ts)
             state = str(data.get('state', 'idle'))
             if state not in STATES:
                 state = 'idle'
-            age = now - ts
-            if state == 'working' and age > timeout:
-                state = 'idle'  # a session gone silent is no longer busy (stuck guard)
-            elif state == 'done' and age > STATES['done']['auto_idle']:
-                state = 'idle'  # the green flash has passed
+            state = effective_state(state, age, timeout)
             sessions.append({'id': file.stem, 'state': state,
                              'detail': str(data.get('detail', '')),
                              'project': str(data.get('project', '')), 'ts': ts})
@@ -225,16 +259,120 @@ class Island(QWidget):
         self._waiting_ids = waiting_now
 
         active = [s for s in sessions if s['state'] != 'offline']
+        self._sessions_snapshot = sorted(
+            active, key=lambda s: (PRIORITY[s['state']], s['ts']), reverse=True)
+        self._session_count = len(active)
+        unknown = sum(s['state'] == 'unknown' for s in active)
+        noun = 'session' if len(active) == 1 else 'sessions'
+        self.setToolTip(f'{len(active)} {noun} tracked'
+                        + (f' ({unknown} status unknown)' if unknown else '')
+                        + '\nClick the count to inspect')
         if not active:
             self.set_state('offline')
             return
-        winner = max(active, key=lambda s: (PRIORITY[s['state']], s['ts']))
+        winner = self._sessions_snapshot[0]
         pieces = [p for p in (winner['project'], winner['detail']) if p]
         text = ' · '.join(pieces)
-        others = len(active) - 1
-        if others:
-            text = (text + ' ' if text else '') + f'(+{others})'
         self.set_state(winner['state'], text)
+
+    def _badge_rect(self) -> QRectF:
+        return QRectF(self.width() - BADGE_WIDTH - 10,
+                      (self.height() - BADGE_HEIGHT) / 2, BADGE_WIDTH, BADGE_HEIGHT)
+
+    def _show_sessions_menu(self) -> None:
+        if self._sessions_menu is not None:
+            self._sessions_menu.close()
+        menu = QMenu(self)
+        menu.setStyleSheet('''
+            QMenu { background: #181b20; color: #e8edf2; border: 1px solid #454a52;
+                    border-radius: 6px; padding: 7px 0; }
+            QMenu::item { padding: 4px 12px; }
+            QMenu::separator { height: 1px; background: #343941; margin: 6px 12px; }
+        ''')
+        unknown = sum(s['state'] == 'unknown' for s in self._sessions_snapshot)
+        heading = f'{self._session_count} session' + (
+            's' if self._session_count != 1 else '') + ' tracked'
+        if unknown:
+            heading += f' · {unknown} unknown'
+        heading_font = QFont('Segoe UI', 9, QFont.DemiBold)
+        header = QLabel(QFontMetrics(heading_font).elidedText(
+            heading, Qt.ElideRight, 304), menu)
+        header.setFixedWidth(332)
+        header.setFont(heading_font)
+        header.setContentsMargins(14, 5, 14, 6)
+        header.setStyleSheet('color: #f0f3f6;')
+        header.setToolTip(heading)
+        header_action = QWidgetAction(menu)
+        header_action.setDefaultWidget(header)
+        menu.addAction(header_action)
+        menu.addSeparator()
+        if not self._sessions_snapshot:
+            empty = menu.addAction('No sessions detected')
+            empty.setEnabled(False)
+        project_counts = {}
+        for session in self._sessions_snapshot:
+            project = session['project'] or 'Unnamed session'
+            project_counts[project] = project_counts.get(project, 0) + 1
+        for session in self._sessions_snapshot:
+            row = QWidget(menu)
+            row.setFixedWidth(332)
+            layout = QHBoxLayout(row)
+            layout.setContentsMargins(14, 7, 14, 7)
+            layout.setSpacing(10)
+            dot = QLabel(row)
+            dot.setFixedSize(9, 9)
+            dot.setStyleSheet(f'background: {STATES[session["state"]]["accent"]}; '
+                              'border-radius: 4px;')
+            layout.addWidget(dot, alignment=Qt.AlignTop)
+            labels = QVBoxLayout()
+            labels.setSpacing(1)
+            project = session['project'] or 'Unnamed session'
+            title_row = QHBoxLayout()
+            title_row.setSpacing(6)
+            title = QLabel(QFontMetrics(QFont('Segoe UI', 9, QFont.DemiBold)).elidedText(
+                project, Qt.ElideRight, 190 if project_counts[project] > 1 else 270), row)
+            title.setStyleSheet('color: #f0f3f6; font-weight: 600;')
+            title_row.addWidget(title)
+            if project_counts[project] > 1:
+                session_id = QLabel(session['id'][:8], row)
+                session_id.setStyleSheet('color: #87919d;')
+                title_row.addWidget(session_id)
+            title_row.addStretch()
+            labels.addLayout(title_row)
+            title.setToolTip(f'{project} · {session["id"]}')
+            status = STATES[session['state']]['label']
+            if session['detail']:
+                status += ' · ' + session['detail']
+            age = max(0, int(time.time() - session['ts']))
+            last_event = 'just now' if age < 60 else (
+                f'{age // 60}m ago' if age < 3600 else f'{age // 3600}h ago')
+            summary_row = QHBoxLayout()
+            summary_row.setSpacing(6)
+            subtitle = QLabel(QFontMetrics(QFont('Segoe UI', 8)).elidedText(
+                status, Qt.ElideRight, 200), row)
+            subtitle.setStyleSheet('color: #aeb6c0;')
+            summary_row.addWidget(subtitle, 1)
+            age_label = QLabel(last_event, row)
+            age_label.setStyleSheet('color: #87919d;')
+            summary_row.addWidget(age_label, 0, Qt.AlignRight)
+            labels.addLayout(summary_row)
+            subtitle.setToolTip(f'{status} · last event {last_event}')
+            layout.addLayout(labels)
+            action = QWidgetAction(menu)
+            action.setDefaultWidget(row)
+            menu.addAction(action)
+        self._sessions_menu = menu
+        menu.aboutToHide.connect(lambda: setattr(self, '_sessions_menu', None))
+        menu.aboutToHide.connect(menu.deleteLater)
+        screen = self.screen() or QApplication.primaryScreen()
+        area = screen.availableGeometry()
+        menu.adjustSize()
+        x = min(max(self.x() + self.width() - menu.width(), area.left()),
+                area.right() - menu.width() + 1)
+        y = self.y() + self.height() + 6
+        if y + menu.height() > area.bottom() + 1:
+            y = self.y() - menu.height() - 6
+        menu.popup(QPoint(x, y))
 
     # --- painting ------------------------------------------------------------
     def _load_avatar(self) -> QPixmap | None:
@@ -287,11 +425,24 @@ class Island(QWidget):
             painter.drawText(avatar_rect, Qt.AlignCenter, 'C')
         painter.restore()
 
-        # Text appears only as the pill opens.
+        compact_alpha = clamp01((0.35 - self._expand) / 0.35)
+        if compact_alpha > 0.01:
+            left = avatar_rect.right() + 12
+            label_rect = QRectF(left, 0, self._badge_rect().left() - left - 8,
+                                rect.height())
+            label_color = QColor(228, 234, 240)
+            label_color.setAlphaF(compact_alpha)
+            painter.setPen(label_color)
+            painter.setFont(QFont('Segoe UI', 9, QFont.DemiBold))
+            label = QFontMetrics(painter.font()).elidedText(
+                STATES[self.state]['label'], Qt.ElideRight, int(label_rect.width()))
+            painter.drawText(label_rect, Qt.AlignVCenter | Qt.AlignLeft, label)
+
         text_alpha = clamp01((self._expand - 0.35) / 0.65)
         if text_alpha > 0.01:
             left = avatar_rect.right() + 12
-            text_rect = QRectF(left, 0, rect.width() - left - 16, rect.height())
+            text_rect = QRectF(left, 0, self._badge_rect().left() - left - 8,
+                               rect.height())
             title = QColor(235, 242, 248)
             title.setAlphaF(text_alpha)
             label_color = QColor(accent)
@@ -313,6 +464,17 @@ class Island(QWidget):
             painter.setPen(label_color)
             painter.drawText(QRectF(text_rect.left(), top + metrics.height(), text_rect.width(), metrics.height()),
                              Qt.AlignVCenter | Qt.AlignLeft, second)
+
+        badge = self._badge_rect()
+        badge_fill = QColor(accent)
+        badge_fill.setAlpha(56 if self._session_count else 25)
+        painter.setPen(QColor(accent) if self._session_count else QColor(105, 113, 124))
+        painter.setBrush(badge_fill)
+        painter.drawRoundedRect(badge, 11, 11)
+        painter.setPen(QColor(246, 249, 251) if self._session_count else QColor(150, 158, 168))
+        painter.setFont(QFont('Segoe UI', 9, QFont.DemiBold))
+        count = str(self._session_count) if self._session_count < 100 else '99+'
+        painter.drawText(badge, Qt.AlignCenter, count)
         painter.end()
 
     # --- interaction ---------------------------------------------------------
@@ -334,8 +496,10 @@ class Island(QWidget):
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802
         if self._drag_offset is not None and not self._moved:
-            # A click (not a drag): jump to the terminal that needs you.
-            self._focus_claude()
+            if self._badge_rect().contains(event.position()):
+                self._show_sessions_menu()
+            else:
+                self._focus_claude()
         elif self._moved:
             self.settings['center_x'] = self._center_x
             save_settings(self.settings)
@@ -354,6 +518,9 @@ class Island(QWidget):
 
     def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802
         # Hide to the tray rather than quit; reopen from the tray icon.
+        if self._badge_rect().contains(event.position()):
+            self._show_sessions_menu()
+            return
         self.toggle_visibility()
 
     def _context_menu(self, position) -> None:
@@ -363,6 +530,9 @@ class Island(QWidget):
             action.triggered.connect(lambda _=False, s=state: write_session(s, '', '_sim', 'simulate'))
             menu.addAction(action)
         menu.addSeparator()
+        forget_action = QAction('Forget inactive sessions', menu)
+        forget_action.triggered.connect(self.forget_inactive_sessions)
+        menu.addAction(forget_action)
         quit_action = QAction('Quit', menu)
         quit_action.triggered.connect(QApplication.instance().quit)
         menu.addAction(quit_action)
@@ -370,15 +540,13 @@ class Island(QWidget):
 
 
 def already_running() -> bool:
-    probe = QLocalSocket()
-    probe.connectToServer(SINGLE_INSTANCE_KEY)
-    if probe.waitForConnected(150):
-        probe.abort()
+    lock = QLockFile(str(settings_path().with_suffix('.lock')))
+    lock.setStaleLockTime(0)
+    if not lock.tryLock(0):
+        if lock.error() != QLockFile.LockError.LockFailedError:
+            raise OSError(f'Cannot lock Claude Island: {lock.error()}')
         return True
-    QLocalServer.removeServer(SINGLE_INSTANCE_KEY)  # clear a stale socket
-    server = QLocalServer()
-    server.listen(SINGLE_INSTANCE_KEY)
-    main._server = server  # keep it alive for the process lifetime
+    main._lock = lock  # keep the lock for the process lifetime
     return False
 
 
