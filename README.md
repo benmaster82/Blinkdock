@@ -1,318 +1,173 @@
-# Claude Island
+<h1 align="center">Blinkdock</h1>
 
-A desktop **Dynamic Island** for Claude Code. A frameless, always-on-top pill
-docked to the top of the screen: it stays small and calm while Claude works and
-**expands** to get your attention when Claude is waiting for input, has finished,
-or hit an error — even if the terminal is in the background.
+<p align="center"><img src="docs/images/widget-listening.png" width="220" alt="Blinkdock widget listening to one Claude Code session"></p>
 
-The island is a read-only **observer**: it never talks to Claude. It polls a small set
-of per-session JSON files that **Claude Code hooks** write through `hook_bridge.py`.
-So Claude runs in its own terminal, you work there normally, and the island
-reflects what happens. The `claude` command itself is never modified.
+<p align="center"><em>Stay in flow. Know when Claude needs you.</em></p>
 
----
+Blinkdock shows when Claude Code is working, waiting for you, finished, or in an error state. It can track several sessions at once, open the right terminal when a session was started with its launcher, and show which files a session edited. Claude Code continues to run in your terminal; the widget observes its hooks and does not replace the CLI. It currently supports local Claude Code CLI sessions on Windows, not other agents or Claude's web/desktop sessions. The application still uses its former Claude Island name in some commands and data paths while the rebrand is in progress.
 
-## How it works
+The project is currently distributed as Python source, not as a packaged Windows installer. It does **not** let you approve permissions or type responses inside the widget: return to the terminal to do that.
 
-```
-   ┌──────────── Dynamic Island (PySide6) ────────────┐
-   │  frameless · always-on-top · top-centre · pill    │
-   │  non-activating (never steals keyboard focus)     │
-   └───────────────────────▲───────────────────────────┘
-                           │ polls (every 150 ms), aggregates all sessions
-                  ┌────────┴──────────────┐
-                  │  sessions/<id>.json   │  one file per session
-                  └────────▲──────────────┘  {"state","detail","project","ts"}
-                           │ atomic write, one event → one state
-                  ┌────────┴─────────┐
-                  │  hook_bridge.py  │  ← invoked by Claude Code hooks
-                  └────────▲─────────┘
-                           │ configured once in settings.json
-                  ┌────────┴─────────┐
-                  │   Claude Code    │  one or more sessions, you work as usual
-                  └──────────────────┘
-```
+| Working | Waiting for input |
+| :---: | :---: |
+| <img src="docs/images/widget-working.png" width="220" alt="Compact widget with a working session and file count"> | <img src="docs/images/widget-waiting.png" width="378" alt="Expanded widget waiting for user input"> |
 
-The island and the hook bridge share `config.py`, so they always agree on the
-sessions directory and the set of states. Successful `Edit` and `Write` calls
-also write small atomic local records of files touched by each session.
+The previews are captured from the real PySide6 interface with sample sessions. The colored ring and expansion animate in the running application.
 
----
+## Get started
 
-## States
+**Requirements:** Windows 10 or 11, Python 3.10 or newer, and an installed, signed-in [Claude Code CLI](https://code.claude.com/docs/en/overview). Windows Terminal is recommended for precise session-to-window switching. Git is optional; it is only needed for the project's Git-status view.
 
-| State | Appearance | Claude Code event |
+1. Download this repository as a ZIP and extract it, or clone it, then open a terminal in its folder:
+
+   ```powershell
+   git clone https://github.com/benmaster82/Blinkdock.git
+   cd Blinkdock
+   ```
+2. Install the Python dependency using the same `python` command you will use to run the app:
+
+   ```powershell
+   python -m pip install -r requirements.txt
+   ```
+
+3. Double-click **`Install.cmd`**, or run `python setup.py`. This installs Claude Code hooks in `%USERPROFILE%\.claude\settings.json`, enables launch at Windows sign-in, and starts the widget now. Existing settings are preserved and an existing `settings.json` is backed up as `settings.json.bak`.
+4. Open Claude Code normally with `claude`. The widget reacts to its next observed event. A session already open during installation may need another tool call or a restart before it appears.
+
+The installer does not modify the `claude` command or `PATH`, and administrator rights are not required. Re-run **`Install.cmd`** after updating this project so the hook commands reflect the current code and path.
+
+To start the already-installed widget manually, double-click **`Start Island.cmd`**. Only one instance can run at a time. To stop it for this sign-in session, use **Quit** in the tray or right-click menu; autostart remains enabled until you uninstall or disable it.
+
+## Everyday use
+
+The widget stays near the top of the screen. Compact states show a status label; states that need attention expand. The number on the right counts tracked sessions, and the file badge counts unique files touched by their successful `Edit` and `Write` tool calls.
+
+| Action | Result |
+| --- | --- |
+| Click the session count | Open the session list, ordered by urgency. Each row shows project, state, detail, and time since its last event. |
+| Click the file badge | Open file activity. Choose a session to see its edits and the shared Git status of its project. |
+| Click the widget body | With multiple sessions, open the list. With one session, focus its terminal when possible. |
+| Drag the widget | Move it horizontally; its position is remembered. |
+| Double-click the body | Hide the widget to the system tray. |
+| Click the tray icon | Show or hide the widget. Right-click the tray icon for Show/Hide, Forget inactive sessions, and Quit. |
+| Right-click the widget | Simulate a state for testing, forget inactive sessions, or quit. |
+
+<p align="center">
+  <img src="docs/images/sessions.png" width="334" alt="Two tracked sessions, one waiting and one working">
+  <img src="docs/images/file-activity.png" width="430" alt="Per-session file activity and shared project Git status">
+</p>
+
+These two panels also use sample data. The Git section is **project-wide**, not attributed to the selected Claude session.
+
+### What the states mean
+
+| State | Visual feedback | Observed event or condition |
 | --- | --- | --- |
-| `offline` | grey, collapsed | `SessionEnd` |
-| `idle` | dim, collapsed | `SessionStart` (ready, listening) |
-| `working` | blue ring, breathing | prompt, tool activity, or resumed work |
-| `background` | **expanded**, teal | `Stop` with background tasks still running |
-| `waiting` | **expanded**, amber, pulsing, chime | permission, MCP input, or another user action |
-| `done` | **expanded** green, then collapses | `Stop` with no background tasks |
-| `error` | **expanded** red | `StopFailure` or a disabled quota resume |
-| `unknown` | **expanded**, grey | no fresh event for a prolonged period |
+| Offline | Small, gray | No tracked session, or a session ended. |
+| Listening | Small, muted | A session started and is ready for a prompt. |
+| Working | Small, blue breathing ring | Prompt submitted, tool activity, or work resumed. Tool detail may say reading, editing, running a command, and so on. |
+| Background work | Expanded, teal | Claude stopped its foreground turn while background tasks were still reported. |
+| Waiting for you | Expanded, amber pulse; optional chime | A foreground permission request, supported notification, or MCP input needs attention. |
+| Done | Expanded, green | Claude stopped with no reported background tasks. Returns to Listening after about three seconds. |
+| Error | Expanded, red | An API/stop failure or a quota resume that cannot proceed. |
+| Status unknown | Expanded, gray | No fresh event for long enough, or an interrupted tool. The widget does not claim Claude is still working. |
 
-The elastic open/close morph (collapsed ↔ expanded) and the breathing ring are
-driven by `QPropertyAnimation`. Compact states keep a short text label visible.
-`done` auto-reverts to `idle` after 3 seconds.
+The widget reports the **last observable hook event**, not a guarantee of Claude's internal state. A manual interruption, denied prompt, or background completion may not have a matching follow-up event; the next event corrects the display, or the state eventually becomes **Status unknown**.
 
----
+### Multiple sessions and terminal focus
 
-## Requirements
+Hooks are installed globally by the easy installer. Each Claude Code session has its own local state file, so parallel sessions do not overwrite one another. The widget displays the most urgent active state: Waiting, Error, Working, Done, Background work, Status unknown, then Listening. A new waiting session sounds the chime even if another session is already waiting. The count includes sessions whose status is unknown, because their end was not observed.
 
-- Windows 10/11
-- Python 3.10+ with **PySide6** (`pip install -r requirements.txt`)
-- Claude Code CLI (`claude`) installed and logged in
-- Windows Terminal (`wt.exe`) recommended, for reliable click-to-focus
-
-The avatar in `assets/clawd.png` is a rasterized version of LobeHub Icons' Claude Code (Clawd) icon. The icon is licensed under the MIT License; see [`assets/LICENSE.lobehub`](assets/LICENSE.lobehub). Source: [LobeHub Icons](https://github.com/lobehub/lobe-icons/blob/master/packages/static-svg/icons/claudecode.svg).
-
-Claude and Claude Code are trademarks of Anthropic. This project is independent and is not affiliated with or endorsed by Anthropic.
-
----
-
-## Easy install (recommended)
-
-Once:
-
-```powershell
-python -m pip install -r requirements.txt
-```
-
-Then **double-click `Install.cmd`** (or run `python setup.py`). It:
-
-- installs the hooks into your Claude Code `settings.json` (with a `.bak` backup,
-  preserving any hooks you already have);
-- enables autostart so the island launches at every Windows login;
-- starts the island immediately.
-
-From then on you **use Claude Code exactly as before** — `claude`, with any
-subcommand — and the island reacts. The `claude` command and your `PATH` are not
-touched. To undo everything: **`Uninstall.cmd`** (or `python setup.py uninstall`).
-
-> The hooks are global, so the island reacts to **every** Claude Code session,
-> including the one you may already be using. A session that was already running
-> when you installed will pick up the hooks on its next tool call or on restart.
-
----
-
-## Try it without Claude
-
-In two terminals:
-
-```powershell
-python island.py     # the pill at the top of the screen
-python demo.py        # cycles it through every state
-```
-
-- **Right-click** the island: menu to simulate any state, or quit.
-- **Drag** to move it (position is remembered).
-- **Double-click**: hides the island to the tray.
-- **Tray icon** (near the clock): click to show/hide, right-click to show or quit.
-
----
-
-## Daily use
-
-After `Install.cmd` there is nothing to launch — the island is always on. Just
-use Claude Code. Behaviour that makes it a tool, not a demo:
-
-- **Waiting → a soft chime** alerts you even if the terminal is in the background
-  (toggle with the `chime` key in `settings.json`).
-- **Click the island → open the session list when several are tracked**; with
-  one launcher-linked session, focus its exact terminal (see *Click-to-focus*).
-- **Click the number on the island → inspect all tracked sessions**, each with
-  its project, state, and time since the last observed event.
-- **Click the file icon and count** to inspect files touched by each session.
-  The panel separately shows the current Git working-tree status for that
-  project. The count covers unique files touched by tracked sessions, not all
-  Git changes. A pending edit is shown separately until the tool succeeds.
-- **Git is checked only while the file panel is open**, in a separate process.
-  Shell commands, other sessions, and your own edits can all affect Git status,
-  so project changes are never attributed to one Claude session without a
-  successful file-tool event. Non-Git folders still show direct file activity.
-- **Single instance**: re-launching never creates a second island.
-- **Stuck-session guard**: if a session dies without a `SessionEnd`, the island
-  changes from `working` to `unknown` after a quiet spell (`working_timeout`,
-  default 240 s). It does not claim the session is idle without evidence.
-- **Remembered position** across restarts.
-
----
-
-## Components
-
-| File | Role |
-| --- | --- |
-| `island.py` | The pill (PySide6): morph, pulse, status polling, tray icon, mouse/click handling, single-instance guard |
-| `hook_bridge.py` | Invoked by the hooks: maps one lifecycle event to one state and atomically writes that session's file |
-| `file_activity.py` | Records successful `Edit`/`Write` paths per session as atomic local files; removes them on session end |
-| `file_panel.py` | On-demand file view and non-blocking Git status scan |
-| `config.py` | Shared: sessions directory, state vocabulary, settings load/save, recorded terminal handle |
-| `winfocus.py` | Find and raise the Claude terminal by window handle / class / title (Windows-only) |
-| `install_hooks.py` | Generate / install / remove the Claude Code hooks in a `settings.json` |
-| `install_autostart.py` | Enable / disable launch at login (per-user `Run` key, no admin) |
-| `launch_claude.py` | Optional: open Claude Code in a new Windows Terminal and record its exact window for precise focus |
-| `setup.py` | One-shot install / uninstall (hooks + autostart + start) |
-| `demo.py` | Cycle the states without Claude, to tune look and motion |
-| `Install.cmd` / `Uninstall.cmd` | Double-click wrappers around `setup.py` |
-| `Start Island.cmd` | Start the island manually with no console window (`pythonw`) |
-
----
-
-## Hooks: event → state mapping
-
-`install_hooks.py` writes one command hook per event. Each runs
-`pythonw hook_bridge.py <state>` (via `pythonw` so no console window flashes):
-
-| Event | State |
-| --- | --- |
-| `SessionStart` | `idle` |
-| `UserPromptSubmit` | `working` |
-| `PreToolUse` | `working` (with the tool name as detail when available) |
-| `PostToolUse`, `PostToolUseFailure` | `working` after a tool result; an interrupted tool becomes `unknown` |
-| `PermissionRequest` | `waiting` immediately for a foreground permission request |
-| `PermissionDenied` | `working` after an auto-mode denial |
-| `Elicitation`, `ElicitationResult` | `waiting`, then `working` for MCP input |
-| `Notification` | `waiting`, `working`, or `error` according to its type |
-| `Stop` | `done`, or `background` if tasks are still running |
-| `StopFailure` | `error` for an API failure |
-| `SessionEnd` | `offline` |
-
-The `Notification` hooks use type matchers. Permission, MCP input, background
-agent input, and stale quota resume requests show `waiting`. Elicitation completion
-and quota auto-resume return to `working`; a disabled quota resume shows `error`.
-Informational notifications such as `idle_prompt` and `auth_success` are ignored.
-After updating an existing installation, re-run `Install.cmd` to refresh the hooks.
-
-Manual control:
-
-```powershell
-python install_hooks.py                               # print the hooks JSON to paste
-python install_hooks.py <settings.json>               # merge into a settings file (with backup)
-python install_hooks.py remove <settings.json>        # strip only the island's hooks
-```
-
-Typical targets: `%USERPROFILE%\.claude\settings.json` (all sessions) or
-`<project>\.claude\settings.json` (one project).
-
-`hook_bridge.py` reads the event JSON that Claude Code passes on stdin. It uses
-`session_id` to keep sessions separate, `notification_type` to verify a matched
-notification, and error codes for the red state. On this Windows setup, a piped
-payload reaches `pythonw`; if stdin is unavailable elsewhere, the installed
-matchers still select notification states but session labels fall back to defaults.
-
----
-
-## Click-to-focus
-
-The session list has an arrow on rows whose exact Windows Terminal window can be
-identified. Click that row to focus its terminal. The optional launcher opens a
-dedicated window with a pinned, unique title and passes its launch ID to Claude;
-the hooks attach that ID to the session state. A row is clickable only while
-exactly one visible Windows Terminal window matches its launch ID. This avoids
-switching to the wrong project when several sessions share a name.
-
-To enable exact focus for a session, open it with the launcher:
+For **reliable return to the correct terminal**, start a session through the optional Windows Terminal launcher:
 
 ```powershell
 python launch_claude.py C:\path\to\project
 ```
 
-Sessions started normally with `claude` are still monitored, but their rows have
-no exact-focus action. Clicking the pill body with several sessions opens the
-list instead of guessing which terminal to raise. With a single unlinked
-session, the older best-effort terminal focus remains: last recorded launcher
-window, then a Windows Terminal window, then a configured title match.
+When `wt.exe` is available, the launcher opens Claude Code in a dedicated Windows Terminal window and links that window to its session. Linked rows in the session list show a focus arrow; click the row to raise that exact window. Without Windows Terminal, the launcher starts Claude Code without an exact-focus link. Sessions started with plain `claude` are still monitored, but their rows cannot offer exact focus. With a single unlinked session, clicking the widget attempts a best-effort terminal focus, which may pick the wrong window if several are open. No text or approval is sent to Claude by the widget.
 
----
+### File activity
+
+The file panel separates two sources of information:
+
+- **Session activity:** successful direct Claude Code `Edit` and `Write` calls, recorded by absolute path. A current file-tool call can appear as pending until it succeeds. The same file is counted once per session, and the panel shows up to 100 recent files for the selected session.
+- **Project Git status (shared):** modified, added, deleted, renamed, and untracked files reported by `git status` for the selected session's working directory. This can include your own edits, shell commands, and changes from other sessions. It is never presented as proof that this particular Claude session made a change.
+
+Git runs asynchronously **only while the file panel is open**, approximately every two seconds; it does not run in Claude's hooks. Non-Git folders still show session activity. File history is local and is removed when that session ends. The badge is not a count of every Git change: indirect edits made through `Bash` or another tool are visible only in shared Git status, not attributed to a session.
+
+## Other ways to run
+
+| Mode | Command | What it does |
+| --- | --- | --- |
+| Normal install | `Install.cmd` or `python setup.py` | Hooks, autostart, and widget. |
+| Manual widget | `python island.py` | Run the UI in a terminal, useful for development; hooks must be installed separately to receive events. |
+| Windowless widget | `Start Island.cmd` | Start the UI with `pythonw`, without a console. |
+| Visual demo | `python demo.py` | Cycle through sample states without Claude Code; run the widget in another terminal first. Stop with Ctrl+C. |
+| Exact-focus Claude session | `python launch_claude.py [project-folder]` | Open a linked Windows Terminal session; hooks still need to be installed. |
+| Uninstall | `Uninstall.cmd` or `python setup.py uninstall` | Remove this app's global hooks and autostart entry, then stop the widget. |
+
+If you want hooks for **one project only**, use the manual installer instead of `Install.cmd`:
+
+```powershell
+python install_hooks.py C:\path\to\project\.claude\settings.json
+python island.py
+```
+
+For global hooks without autostart, replace the project path with `%USERPROFILE%\.claude\settings.json`. `install_hooks.py` merges with existing hooks and backs up an existing settings file. Run `python install_hooks.py remove <path-to-settings.json>` to remove only this project's hook commands from that file. Running `python install_hooks.py` with no path prints the JSON block for manual inspection or installation. `python install_autostart.py` enables autostart separately; `python install_autostart.py off` disables it. Manual project-scoped hooks are **not** removed by `Uninstall.cmd`, which only targets the global settings file.
 
 ## Configuration
 
-User preferences live in `%LOCALAPPDATA%\claude-island\settings.json`:
+Preferences live at `%LOCALAPPDATA%\claude-island\settings.json`. The file is created as needed; missing keys use these defaults:
 
-| Key | Default | Meaning |
+| Key | Default | Purpose |
 | --- | --- | --- |
-| `center_x` | `null` | Horizontal centre in pixels; `null` = centre of the screen. Updated when you drag. |
-| `top_margin` | `12` | Distance from the top of the work area, in pixels. |
-| `chime` | `true` | Soft sound when Claude starts waiting for you. |
-| `working_timeout` | `240` | Seconds of silence before `working` becomes `unknown`. |
-| `focus_title` | `Claude Code` | Fallback title substring for click-to-focus. |
+| `center_x` | `null` | Horizontal center in screen pixels. `null` centers automatically; dragging updates it. |
+| `top_margin` | `12` | Distance from the top of the available screen area, in pixels. |
+| `chime` | `true` | Play a Windows notification sound when a new session needs attention. |
+| `working_timeout` | `240` | Seconds without a new event before Working becomes Status unknown. |
+| `focus_title` | `Claude Code` | Last-resort terminal title match for best-effort focus. |
 
-Other files under `%LOCALAPPDATA%\claude-island\`:
+The same directory holds `sessions\*.json` (one state per session), `activity-*.json` (recorded file activity), `terminal.json` (a remembered terminal window handle), and `settings.lock` (the single-instance guard). Session files are removed on `SessionEnd`; if that event is missed, **Forget inactive sessions** removes records whose last event is over an hour old. Waiting, Error, Background work, and Listening also change to Status unknown after an hour of silence; Working uses `working_timeout`.
 
-- `sessions\<session_id>.json` — one live state file per Claude session.
-- `terminal.json` — the recorded terminal window handle, if any.
-- `settings.lock` — held while the island runs to prevent duplicate instances.
+## How it works
 
----
+Claude Code hook -> `hook_bridge.py` -> per-session JSON -> `island.py` -> widget. Each hook runs a short `pythonw` command, reads Claude's event payload, and atomically writes one local state file. Successful direct file edits also write small per-session activity records. The UI polls those files; it does not inspect Claude's private process or alter its command. The file panel alone starts `git status`, in a separate process when visible.
 
-## Multiple sessions
+| Claude Code hook | Widget result |
+| --- | --- |
+| `SessionStart`, `SessionEnd` | Listening; remove ended session. |
+| `UserPromptSubmit`, `PreToolUse`, `PostToolUse` | Working. |
+| `PostToolUseFailure` | Working, or Status unknown if explicitly interrupted. |
+| `PermissionRequest`, `Elicitation` | Waiting for you; background-agent permission requests are not treated as a foreground prompt. |
+| `PermissionDenied`, `ElicitationResult` | Working again. |
+| `Notification` | Waiting, Working, or Error for supported notification types; informational notifications are ignored. |
+| `Stop`, `StopFailure` | Done or Background work; Error on stop failure. |
 
-Each Claude Code session (keyed by its `session_id`) writes its own file in the
-`sessions` directory, so parallel sessions never clobber each other. The island
-reads them all every tick and shows the **most urgent** one, by priority:
+Supported waiting notifications include permission prompts, MCP dialogs, agent input requests, and stale quota resumes. Elicitation completion and automatic quota resume return to Working; a disabled quota resume becomes Error. The bridge validates the notification type in the event payload before changing state. Hook names and payloads can vary between Claude Code versions, so behavior may require adjustment after an upstream change.
 
-```
-waiting  >  error  >  working  >  done  >  background  >  unknown  >  idle
-```
+| File | Responsibility |
+| --- | --- |
+| `island.py` | Widget, session aggregation, animation, tray, interaction, and focus controls. |
+| `hook_bridge.py`, `install_hooks.py` | Translate events and install/remove Claude Code hook entries. |
+| `file_activity.py`, `file_panel.py` | Per-session file records and on-demand shared Git view. |
+| `config.py`, `winfocus.py` | Shared state/settings and Windows terminal focus. |
+| `setup.py`, `install_autostart.py`, `launch_claude.py` | Installation, sign-in startup, and linked session launcher. |
 
-So if one session is working and another is waiting for you, the island goes
-amber for the waiting one. It labels the pill with that session's **project**
-(the working directory's name). A dedicated number shows how many sessions are
-tracked; click it for a status list sorted by urgency. `unknown` sessions still
-appear in the count but are clearly marked because their activity cannot be
-confirmed. Launcher-linked rows can open their exact terminal. The chime fires
-whenever a *new* session starts waiting, even if the
-island was already amber for another. A silent `working` session becomes
-`unknown` after `working_timeout`; `waiting`, `error`, and `background` become
-`unknown` after an hour, as does an inactive `idle` session. A `done` flash
-returns to `idle` after three seconds. Session files are retained until
-`SessionEnd`; the tray and right-click menus offer **Forget inactive sessions**
-for sessions without an event for over an hour.
-
----
-
-## Uninstall
-
-```powershell
-python setup.py uninstall      # or double-click Uninstall.cmd
-```
-
-Removes only the island's hooks (your other hooks and settings are kept), disables
-autostart, and stops the island. The `claude` command is never affected.
-
----
+Tests: `python -m unittest discover -s tests -q`. Documentation previews can be regenerated with `python tools/render_readme_previews.py`; that script uses isolated sample data and does not connect to live Claude sessions.
 
 ## Troubleshooting
 
-- **States don't change when I use Claude.** The hook event names on your build
-  may differ from the mapping above. Check `%USERPROFILE%\.claude\settings.json`,
-  then adjust the `EVENTS` map in `install_hooks.py` and re-run the merge.
-- **The island isn't visible.** Make sure the process is running
-  (`pythonw island.py`), or re-run `Install.cmd`. In `idle`/`offline` it is small
-  and dim at the top-centre — nudge it with a state to spot it, or drag it.
-- **A black console flashes on every tool.** The hooks must use `pythonw`, not
-  `python`. Re-run `python install_hooks.py %USERPROFILE%\.claude\settings.json`
-  after updating — the command is regenerated with `pythonw`.
-- **Click focuses the wrong window.** Launch Claude via `launch_claude.py` so the
-  exact terminal is recorded; otherwise the top Windows Terminal window is used.
+| Problem | Check |
+| --- | --- |
+| Nothing appears | Look for the tray icon; click it to show the widget. Or start it with `Start Island.cmd`. A second launch does not create another instance. |
+| The widget never changes state | Re-run `Install.cmd` after moving or updating the repository. Check `%USERPROFILE%\.claude\settings.json` for the installed hook commands, then start a new Claude Code session or trigger a tool event. |
+| A console flashes for every hook | Re-run the hook installer so commands point to `pythonw.exe`; verify that your Python installation includes it. |
+| Click raises the wrong terminal | Use `launch_claude.py` and click its linked row in the session list. Ordinary sessions only have best-effort single-session focus. |
+| Files are missing from session activity | Only successful direct `Edit`/`Write` calls are attributed. Check the shared Git section for changes from commands or other processes. |
+| Git status is unavailable | Install Git and ensure it is on `PATH`, or check that the session's working directory is a Git repository. Session activity works without Git. |
+| A session remains after Claude closes | Its `SessionEnd` hook may not have run. The state eventually becomes unknown; use **Forget inactive sessions** after an hour. |
 
----
+## Uninstall and project status
 
-## Known limitations
+Double-click **`Uninstall.cmd`**, or run `python setup.py uninstall`. This removes the app's hooks from the global Claude Code settings, disables per-user autostart, and stops the widget. Other Claude Code hooks and the `claude` command remain intact. Project-scoped hooks installed manually must be removed manually as described above. Local preference/activity files are not deleted by the uninstaller.
 
-- **Single agent (Claude Code).** Codex and other agents have no equivalent hooks;
-  they would need a coarser state (running / stopped) or a wrapped process.
-- **Manual sessions cannot be focused exactly.** Claude Code's hook payload
-  identifies the session but not its terminal window. Use `launch_claude.py` for
-  exact focus; without Windows Terminal, the launcher cannot create the link.
-- **`working` is one level.** Finer detail ("runs a command", "edits a file")
-  comes from `PreToolUse` only when stdin is available to the hook.
-- **Interrupts and manual permission denial.** Claude Code does not emit a
-  corresponding completion hook for every such action. The island updates on the
-  next observed event; otherwise it eventually shows `unknown`.
-- **Background completion.** A `Stop` payload can report outstanding tasks, but
-  later completion notifications do not identify the full remaining task set.
-  A silent background state eventually becomes `unknown`.
-- **Windows only.** Window focus, autostart, the chime, and the launcher are
-  Windows-specific; the island renders elsewhere but those features no-op.
+**Name and license:** Blinkdock is released under the [MIT License](LICENSE). Some commands and data paths still use the former Claude Island name. The bundled `assets/clawd.png` is derived from [LobeHub Icons](https://github.com/lobehub/lobe-icons/blob/master/packages/static-svg/icons/claudecode.svg) and is covered by its separate [MIT license notice](assets/LICENSE.lobehub). Claude and Claude Code are trademarks of Anthropic. This is an independent project, not affiliated with or endorsed by Anthropic.
