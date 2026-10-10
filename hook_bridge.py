@@ -23,7 +23,7 @@ from config import NOTIFICATION_STATES, STATES, sessions_dir
 
 def safe_id(session_id: str) -> str:
     cleaned = re.sub(r'[^A-Za-z0-9._-]', '_', session_id)[:80]
-    return cleaned or 'default'
+    return cleaned if cleaned not in ('', '.', '..') else 'default'
 
 
 def read_event() -> dict:
@@ -73,8 +73,19 @@ def state_for_event(state: str, event: dict) -> str | None:
     return state
 
 
+def file_path_for_event(event: dict) -> str:
+    if event.get('tool_name') not in ('Edit', 'Write'):
+        return ''
+    tool_input = event.get('tool_input')
+    path = tool_input.get('file_path') if isinstance(tool_input, dict) else None
+    if not isinstance(path, str) or not path or len(path) > 4096:
+        return ''
+    return path if Path(path).is_absolute() else ''
+
+
 def write_session(state: str, detail: str = '', session_id: str = 'default',
-                  project: str = '', launch_id: str = '') -> None:
+                  project: str = '', launch_id: str = '', cwd: str = '',
+                  pending_file: str = '') -> None:
     if state not in STATES:
         state = 'idle'
     path = sessions_dir() / (safe_id(session_id) + '.json')
@@ -83,6 +94,10 @@ def write_session(state: str, detail: str = '', session_id: str = 'default',
         return
     data = {'state': state, 'detail': detail[:200],
             'project': project[:60], 'ts': time.time()}
+    if cwd:
+        data['cwd'] = cwd
+    if pending_file:
+        data['pending_file'] = pending_file
     if re.fullmatch(r'[0-9a-f]{16}', launch_id):
         data['launch_id'] = launch_id
     payload = json.dumps(data, ensure_ascii=False)
@@ -101,10 +116,23 @@ def main() -> None:
     cwd = str(event.get('cwd') or '')
     project = Path(cwd).name if cwd else ''
     launch_id = os.environ.get('CLAUDE_ISLAND_LAUNCH_ID', '')
+    file_path = file_path_for_event(event)
+    pending_file = file_path if event.get('hook_event_name') == 'PreToolUse' else ''
     if re.fullmatch(r'[0-9a-f]{16}', launch_id):
-        write_session(state, detail_for(state, event), session_id, project, launch_id)
+        write_session(state, detail_for(state, event), session_id, project, launch_id,
+                      cwd=cwd, pending_file=pending_file)
     else:
-        write_session(state, detail_for(state, event), session_id, project)
+        write_session(state, detail_for(state, event), session_id, project,
+                      cwd=cwd, pending_file=pending_file)
+    if state == 'offline' or (event.get('hook_event_name') == 'PostToolUse' and file_path):
+        from file_activity import record_file, remove_session
+        try:
+            if state == 'offline':
+                remove_session(safe_id(session_id))
+            else:
+                record_file(safe_id(session_id), file_path, event['tool_name'])
+        except (OSError, ValueError):
+            pass  # file activity must never interfere with Claude's tool call
 
 
 if __name__ == '__main__':

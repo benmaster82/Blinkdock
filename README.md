@@ -5,7 +5,7 @@ docked to the top of the screen: it stays small and calm while Claude works and
 **expands** to get your attention when Claude is waiting for input, has finished,
 or hit an error — even if the terminal is in the background.
 
-The island is a pure **renderer**: it never talks to Claude. It polls a small set
+The island is a read-only **observer**: it never talks to Claude. It polls a small set
 of per-session JSON files that **Claude Code hooks** write through `hook_bridge.py`.
 So Claude runs in its own terminal, you work there normally, and the island
 reflects what happens. The `claude` command itself is never modified.
@@ -34,7 +34,8 @@ reflects what happens. The `claude` command itself is never modified.
 ```
 
 The island and the hook bridge share `config.py`, so they always agree on the
-sessions directory and the set of states.
+sessions directory and the set of states. Successful `Edit` and `Write` calls
+also write small atomic local records of files touched by each session.
 
 ---
 
@@ -122,6 +123,14 @@ use Claude Code. Behaviour that makes it a tool, not a demo:
   one launcher-linked session, focus its exact terminal (see *Click-to-focus*).
 - **Click the number on the island → inspect all tracked sessions**, each with
   its project, state, and time since the last observed event.
+- **Click the file icon and count** to inspect files touched by each session.
+  The panel separately shows the current Git working-tree status for that
+  project. The count covers unique files touched by tracked sessions, not all
+  Git changes. A pending edit is shown separately until the tool succeeds.
+- **Git is checked only while the file panel is open**, in a separate process.
+  Shell commands, other sessions, and your own edits can all affect Git status,
+  so project changes are never attributed to one Claude session without a
+  successful file-tool event. Non-Git folders still show direct file activity.
 - **Single instance**: re-launching never creates a second island.
 - **Stuck-session guard**: if a session dies without a `SessionEnd`, the island
   changes from `working` to `unknown` after a quiet spell (`working_timeout`,
@@ -136,6 +145,8 @@ use Claude Code. Behaviour that makes it a tool, not a demo:
 | --- | --- |
 | `island.py` | The pill (PySide6): morph, pulse, status polling, tray icon, mouse/click handling, single-instance guard |
 | `hook_bridge.py` | Invoked by the hooks: maps one lifecycle event to one state and atomically writes that session's file |
+| `file_activity.py` | Records successful `Edit`/`Write` paths per session as atomic local files; removes them on session end |
+| `file_panel.py` | On-demand file view and non-blocking Git status scan |
 | `config.py` | Shared: sessions directory, state vocabulary, settings load/save, recorded terminal handle |
 | `winfocus.py` | Find and raise the Claude terminal by window handle / class / title (Windows-only) |
 | `install_hooks.py` | Generate / install / remove the Claude Code hooks in a `settings.json` |

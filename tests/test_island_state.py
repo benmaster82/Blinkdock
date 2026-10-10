@@ -50,15 +50,19 @@ class StateTests(unittest.TestCase):
 
         widget = SimpleNamespace(_sessions_dir=Path(__file__).parent,
                                  settings={'working_timeout': 240},
-                                 _read_sessions=mock.Mock())
+                                 _read_sessions=mock.Mock(),
+                                 _read_file_count=mock.Mock())
         with mock.patch.object(island.time, 'time', return_value=10000):
             sessions = island.Island._load_sessions(widget)
             self.assertEqual({s['state'] for s in sessions}, {'unknown', 'idle'})
             self.assertTrue(paths[0].exists())
-            island.Island.forget_inactive_sessions(widget)
+            with mock.patch.object(island, 'remove_session') as remove:
+                island.Island.forget_inactive_sessions(widget)
+            remove.assert_called_once_with(paths[0].stem)
         self.assertFalse(paths[0].exists())
         self.assertTrue(paths[1].exists())
         widget._read_sessions.assert_called_once()
+        widget._read_file_count.assert_called_once()
 
     def test_waiting_session_wins_without_repeated_chimes(self):
         paths = []
@@ -74,7 +78,7 @@ class StateTests(unittest.TestCase):
 
         widget = SimpleNamespace(_sessions_dir=Path(__file__).parent,
                                  settings={'working_timeout': 'invalid', 'chime': True},
-                                 _waiting_ids=set(), set_state=mock.Mock(),
+                                 _waiting_ids=set(), _file_count=0, set_state=mock.Mock(),
                                  setToolTip=mock.Mock(), _chime=mock.Mock())
         widget._load_sessions = lambda: island.Island._load_sessions(widget)
         with mock.patch.object(island.time, 'time', return_value=10000):
@@ -89,6 +93,7 @@ class StateTests(unittest.TestCase):
 
     def test_unknown_session_is_counted_but_not_presented_as_confirmed_active(self):
         widget = SimpleNamespace(settings={'chime': False}, _waiting_ids=set(),
+                                 _file_count=0,
                                  _load_sessions=lambda: [
                                      {'id': 'old', 'state': 'unknown', 'ts': 10,
                                       'project': 'repo', 'detail': ''}],
@@ -113,10 +118,15 @@ class StateTests(unittest.TestCase):
                  'detail': '', 'ts': time.time() - 3700, 'launch_id': ''},
             ]
             widget._session_count = 2
+            widget._file_count = 5
             widget.set_state('waiting', 'repo · approval', animate=False)
             widget.show()
             app.processEvents()
             self.assertLessEqual(widget._badge_rect().right(), widget.width())
+            self.assertLess(widget._file_badge_rect().right(), widget._badge_rect().left())
+            with mock.patch.object(island, 'count_files', return_value=7):
+                widget._read_file_count()
+            self.assertEqual(widget._file_count, 7)
             with mock.patch.object(island, 'find_session_terminal',
                                    side_effect=lambda value: 42 if value == token else None):
                 widget._show_sessions_menu()
@@ -144,6 +154,11 @@ class StateTests(unittest.TestCase):
                 widget.mouseReleaseEvent(SimpleNamespace(position=lambda: QPointF(75, 26)))
             show.assert_called_once()
             generic.assert_not_called()
+            widget._drag_offset = QPointF(0, 0)
+            with mock.patch.object(widget, '_show_files_panel') as show_files:
+                widget.mouseReleaseEvent(SimpleNamespace(
+                    position=lambda: widget._file_badge_rect().center()))
+            show_files.assert_called_once()
         finally:
             widget.close()
 

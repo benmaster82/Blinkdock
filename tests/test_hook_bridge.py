@@ -24,7 +24,8 @@ class NotificationTests(unittest.TestCase):
                 event = {'session_id': 'session-1', 'cwd': 'C:/work/project',
                          'notification_type': notification_type, 'message': 'Action needed'}
                 self.run_notification(event).assert_called_once_with(
-                    'waiting', 'Action needed', 'session-1', 'project')
+                    'waiting', 'Action needed', 'session-1', 'project',
+                    cwd='C:/work/project', pending_file='')
 
     def test_informational_and_unknown_notifications_are_ignored(self):
         for notification_type in ('idle_prompt', 'auth_success', 'agent_completed', 'unknown'):
@@ -34,7 +35,8 @@ class NotificationTests(unittest.TestCase):
         self.run_notification({'session_id': 'session-1'}).assert_not_called()
 
     def test_missing_stdin_uses_installed_matcher(self):
-        self.run_notification({}).assert_called_once_with('waiting', '', 'default', '')
+        self.run_notification({}).assert_called_once_with(
+            'waiting', '', 'default', '', cwd='', pending_file='')
 
     def test_recovery_and_failure_notifications(self):
         for notification_type, state in (
@@ -45,7 +47,8 @@ class NotificationTests(unittest.TestCase):
         ):
             with self.subTest(notification_type=notification_type):
                 event = {'session_id': 'session-1', 'notification_type': notification_type}
-                self.run_notification(event).assert_called_once_with(state, '', 'session-1', '')
+                self.run_notification(event).assert_called_once_with(
+                    state, '', 'session-1', '', cwd='', pending_file='')
 
     def test_permission_request_and_background_stop(self):
         self.assertEqual(hook_bridge.state_for_event('waiting', {

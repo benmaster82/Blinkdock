@@ -18,11 +18,13 @@ from PySide6.QtCore import (Property, QEasingCurve, QLockFile, QPoint, QPointF,
 from PySide6.QtGui import (QAction, QColor, QFont, QFontMetrics, QIcon, QPainter,
                            QPainterPath, QPixmap)
 from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLabel, QMenu,
-                               QSystemTrayIcon, QVBoxLayout,
+                               QStyle, QSystemTrayIcon, QVBoxLayout,
                                QWidget, QWidgetAction)
 
 from config import (DEFAULT_STATE, STATES, load_settings, load_terminal_hwnd,
                     save_settings, sessions_dir, settings_path)
+from file_activity import count_files, remove_session
+from file_panel import FilePanel
 from hook_bridge import write_session
 from winfocus import (find_session_terminal, find_terminals, raise_hwnd,
                       raise_session_terminal, raise_window)
@@ -32,11 +34,12 @@ PRIORITY = {'offline': 0, 'idle': 1, 'unknown': 2, 'background': 3,
             'done': 4, 'working': 5, 'error': 6, 'waiting': 7}
 
 ASSETS = Path(__file__).with_name('assets')
-COLLAPSED = (174, 52)
-EXPANDED = (332, 60)
+COLLAPSED = (220, 52)
+EXPANDED = (378, 60)
 TOP_MARGIN = 12
 BADGE_WIDTH = 32
 BADGE_HEIGHT = 24
+FILE_BADGE_WIDTH = 48
 
 
 def lerp(a: float, b: float, t: float) -> float:
@@ -98,7 +101,9 @@ class Island(QWidget):
         self._waiting_ids: set[str] = set()
         self._sessions_snapshot: list[dict] = []
         self._session_count = 0
+        self._file_count = 0
         self._sessions_menu: QMenu | None = None
+        self._files_panel: FilePanel | None = None
 
         self.avatar = self._load_avatar()
 
@@ -116,6 +121,11 @@ class Island(QWidget):
         self._poll.setInterval(150)
         self._poll.timeout.connect(self._read_sessions)
         self._poll.start()
+
+        self._file_poll = QTimer(self)
+        self._file_poll.setInterval(750)
+        self._file_poll.timeout.connect(self._read_file_count)
+        self._file_poll.start()
 
         self._apply_geometry()
         self.set_state(DEFAULT_STATE, animate=False)
@@ -165,7 +175,12 @@ class Island(QWidget):
                 continue
             if math.isfinite(ts) and ts < cutoff:
                 file.unlink(missing_ok=True)
+                try:
+                    remove_session(file.stem)
+                except (OSError, ValueError):
+                    pass
         self._read_sessions()
+        self._read_file_count()
 
     # --- animated properties -------------------------------------------------
     def _get_expand(self) -> float:
@@ -268,8 +283,16 @@ class Island(QWidget):
             sessions.append({'id': file.stem, 'state': state,
                              'detail': str(data.get('detail', '')),
                              'project': str(data.get('project', '')), 'ts': ts,
-                             'launch_id': str(data.get('launch_id', ''))})
+                             'launch_id': str(data.get('launch_id', '')),
+                             'cwd': str(data.get('cwd', '')),
+                             'pending_file': str(data.get('pending_file', ''))})
         return sessions
+
+    def _read_file_count(self) -> None:
+        count = count_files([s['id'] for s in self._sessions_snapshot])
+        if count != self._file_count:
+            self._file_count = count
+            self.update()
 
     def _read_sessions(self) -> None:
         sessions = self._load_sessions()
@@ -285,10 +308,12 @@ class Island(QWidget):
         self._session_count = len(active)
         unknown = sum(s['state'] == 'unknown' for s in active)
         noun = 'session' if len(active) == 1 else 'sessions'
-        self.setToolTip(f'{len(active)} {noun} tracked'
+        self.setToolTip(f'{len(active)} {noun} tracked; '
+                        f'{self._file_count} files touched'
                         + (f' ({unknown} status unknown)' if unknown else '')
-                        + '\nClick the count to inspect')
+                        + '\nClick the session count or file icon to inspect')
         if not active:
+            self._file_count = 0
             self.set_state('offline')
             return
         winner = self._sessions_snapshot[0]
@@ -299,6 +324,19 @@ class Island(QWidget):
     def _badge_rect(self) -> QRectF:
         return QRectF(self.width() - BADGE_WIDTH - 10,
                       (self.height() - BADGE_HEIGHT) / 2, BADGE_WIDTH, BADGE_HEIGHT)
+
+    def _file_badge_rect(self) -> QRectF:
+        return QRectF(self._badge_rect().left() - FILE_BADGE_WIDTH - 7,
+                      (self.height() - BADGE_HEIGHT) / 2,
+                      FILE_BADGE_WIDTH, BADGE_HEIGHT)
+
+    def _show_files_panel(self) -> None:
+        if self._files_panel is None:
+            self._files_panel = FilePanel(lambda: self._sessions_snapshot, self)
+        if self._files_panel.isVisible():
+            self._files_panel.hide()
+        else:
+            self._files_panel.show_below(self)
 
     def _show_sessions_menu(self) -> None:
         if self._sessions_menu is not None:
@@ -475,7 +513,7 @@ class Island(QWidget):
         compact_alpha = clamp01((0.35 - self._expand) / 0.35)
         if compact_alpha > 0.01:
             left = avatar_rect.right() + 12
-            label_rect = QRectF(left, 0, self._badge_rect().left() - left - 8,
+            label_rect = QRectF(left, 0, self._file_badge_rect().left() - left - 8,
                                 rect.height())
             label_color = QColor(228, 234, 240)
             label_color.setAlphaF(compact_alpha)
@@ -488,7 +526,7 @@ class Island(QWidget):
         text_alpha = clamp01((self._expand - 0.35) / 0.65)
         if text_alpha > 0.01:
             left = avatar_rect.right() + 12
-            text_rect = QRectF(left, 0, self._badge_rect().left() - left - 8,
+            text_rect = QRectF(left, 0, self._file_badge_rect().left() - left - 8,
                                rect.height())
             title = QColor(235, 242, 248)
             title.setAlphaF(text_alpha)
@@ -511,6 +549,17 @@ class Island(QWidget):
             painter.setPen(label_color)
             painter.drawText(QRectF(text_rect.left(), top + metrics.height(), text_rect.width(), metrics.height()),
                              Qt.AlignVCenter | Qt.AlignLeft, second)
+
+        file_badge = self._file_badge_rect()
+        painter.setPen(QColor(78, 187, 183) if self._file_count else QColor(105, 113, 124))
+        painter.setBrush(QColor(48, 105, 104, 95) if self._file_count else QColor(72, 80, 88, 45))
+        painter.drawRoundedRect(file_badge, 7, 7)
+        icon = self.style().standardIcon(QStyle.SP_FileIcon).pixmap(14, 14)
+        painter.drawPixmap(round(file_badge.left() + 5), round(file_badge.center().y() - 7), icon)
+        painter.setPen(QColor(246, 249, 251) if self._file_count else QColor(150, 158, 168))
+        painter.setFont(QFont('Segoe UI', 9, QFont.DemiBold))
+        files = str(self._file_count) if self._file_count < 100 else '99+'
+        painter.drawText(file_badge.adjusted(20, 0, -3, 0), Qt.AlignCenter, files)
 
         badge = self._badge_rect()
         badge_fill = QColor(accent)
@@ -543,7 +592,9 @@ class Island(QWidget):
 
     def mouseReleaseEvent(self, event) -> None:  # noqa: N802
         if self._drag_offset is not None and not self._moved:
-            if self._badge_rect().contains(event.position()):
+            if self._file_badge_rect().contains(event.position()):
+                self._show_files_panel()
+            elif self._badge_rect().contains(event.position()):
                 self._show_sessions_menu()
             elif self._session_count > 1:
                 self._show_sessions_menu()
@@ -569,6 +620,9 @@ class Island(QWidget):
 
     def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802
         # Hide to the tray rather than quit; reopen from the tray icon.
+        if self._file_badge_rect().contains(event.position()):
+            self._show_files_panel()
+            return
         if self._badge_rect().contains(event.position()):
             self._show_sessions_menu()
             return
