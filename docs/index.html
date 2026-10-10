@@ -1,0 +1,641 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#f4f6f7" />
+    <title>Blinkdock | Claude Code status, always in sight</title>
+    <meta
+      name="description"
+      content="A small, always-on-top Windows widget for Claude Code. Follow session status, see edited files, and return to the right terminal. Free and open source."
+    />
+    <link rel="canonical" href="https://benmaster82.github.io/Blinkdock/" />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Blinkdock | Stay in flow." />
+    <meta
+      property="og:description"
+      content="Know when Claude needs you. A quiet status widget for Claude Code on Windows."
+    />
+    <meta
+      property="og:url"
+      content="https://benmaster82.github.io/Blinkdock/"
+    />
+    <meta
+      property="og:image"
+      content="https://benmaster82.github.io/Blinkdock/images/social-preview.png"
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta property="og:image:alt" content="Blinkdock and its Listening widget. Stay in flow. Know when Claude needs you." />
+    <link rel="icon" type="image/png" href="site/assets/clawd.png" />
+    <link
+      rel="preload"
+      href="site/assets/manrope.ttf"
+      as="font"
+      type="font/ttf"
+      crossorigin
+    />
+    <link rel="stylesheet" href="site/style.css" />
+    <script src="site/main.js" defer></script>
+  </head>
+  <body>
+    <a class="skip-link" href="#main">Skip to content</a>
+    <header class="site-header">
+      <div class="header-inner">
+        <a class="brand" href="#" aria-label="Blinkdock home"
+          ><img
+            src="site/assets/clawd.png"
+            width="28"
+            height="28"
+            alt=""
+          />Blinkdock</a
+        >
+        <nav aria-label="Main navigation">
+          <a class="workflow-link" href="#workflow">The workflow</a>
+          <a href="https://github.com/benmaster82/Blinkdock#readme">Docs</a>
+          <a
+            class="nav-github"
+            href="https://github.com/benmaster82/Blinkdock"
+            aria-label="GitHub repository"
+            ><span class="icon i-github" aria-hidden="true"></span
+            ><span>GitHub</span></a
+          >
+        </nav>
+      </div>
+    </header>
+
+    <main id="main">
+      <section class="hero" aria-labelledby="hero-title">
+        <div class="hero-copy">
+          <p class="availability">
+            <span class="status-dot green" aria-hidden="true"></span>A companion
+            for Claude Code on Windows
+          </p>
+          <h1 id="hero-title">Blinkdock</h1>
+          <p class="motto">Stay in flow. Know when Claude needs you.</p>
+          <p class="hero-description">
+            Your sessions, their status, and the files they touch.<br
+              class="desktop-break"
+            />
+            A small widget that keeps it all in sight.
+          </p>
+          <div class="hero-actions">
+            <a class="button primary" href="#install"
+              ><span class="icon i-download" aria-hidden="true"></span>Get
+              Blinkdock</a
+            >
+            <a
+              class="button secondary"
+              href="https://github.com/benmaster82/Blinkdock"
+              ><span class="icon i-github" aria-hidden="true"></span>View
+              source</a
+            >
+          </div>
+        </div>
+
+        <div class="demo" data-state="listening">
+          <div class="demo-scene">
+            <div class="scene-context context-left" aria-hidden="true">
+              <div class="context-title">
+                <span class="icon i-terminal"></span>editor
+              </div>
+              <div class="context-code">
+                <span class="prompt">&gt;</span> claude<br /><span
+                  id="terminal-status"
+                  >Ready for your next prompt.</span
+                ><br /><span class="cursor">_</span>
+              </div>
+            </div>
+            <div
+              class="widget-position"
+              id="state-panel"
+              role="tabpanel"
+              aria-labelledby="state-listening"
+            >
+              <img
+                class="hero-widget"
+                id="hero-widget"
+                src="images/widget-listening.png"
+                width="440"
+                height="104"
+                alt="Blinkdock listening, with one tracked session and no edited files"
+              />
+            </div>
+            <div class="scene-context context-right" aria-hidden="true">
+              <div class="context-title">
+                <span class="icon i-files"></span>Session activity
+              </div>
+              <div class="context-code" id="activity-preview">
+                <span class="muted">No files touched yet</span><br /><span
+                  class="muted"
+                  >Waiting for a new task</span
+                >
+              </div>
+            </div>
+            <span class="preview-label"
+              >Interactive preview with sample data</span
+            >
+          </div>
+          <div class="demo-controls" hidden>
+            <div
+              class="state-tabs"
+              role="tablist"
+              aria-label="Preview a Claude Code state"
+            >
+              <button
+                id="state-listening"
+                role="tab"
+                aria-selected="true"
+                aria-controls="state-panel"
+                data-state="listening"
+              >
+                <span class="status-dot gray" aria-hidden="true"></span
+                >Listening
+              </button>
+              <button
+                id="state-working"
+                role="tab"
+                aria-selected="false"
+                aria-controls="state-panel"
+                tabindex="-1"
+                data-state="working"
+              >
+                <span class="status-dot blue" aria-hidden="true"></span>Working
+              </button>
+              <button
+                id="state-waiting"
+                role="tab"
+                aria-selected="false"
+                aria-controls="state-panel"
+                tabindex="-1"
+                data-state="waiting"
+              >
+                <span class="status-dot amber" aria-hidden="true"></span>Waiting
+              </button>
+              <button
+                id="state-done"
+                role="tab"
+                aria-selected="false"
+                aria-controls="state-panel"
+                tabindex="-1"
+                data-state="done"
+              >
+                <span class="status-dot green" aria-hidden="true"></span>Done
+              </button>
+            </div>
+            <button
+              class="icon-button play-button"
+              id="play-demo"
+              type="button"
+              aria-label="Play state demo"
+              aria-pressed="false"
+              title="Play state demo"
+            >
+              <span class="icon i-play" aria-hidden="true"></span>
+            </button>
+          </div>
+          <p
+            class="state-description"
+            id="state-description"
+            aria-live="polite"
+          >
+            Ready when you are. One session, quietly listening.
+          </p>
+        </div>
+      </section>
+
+      <div class="compatibility-band">
+        <div class="container compatibility-inner">
+          <span
+            ><span class="icon i-monitor" aria-hidden="true"></span>Windows 10
+            &amp; 11</span
+          >
+          <span>Python 3.10+</span>
+          <span>Local status tracking</span>
+          <a href="https://github.com/benmaster82/Blinkdock/blob/main/LICENSE"
+            >Open source / MIT</a
+          >
+        </div>
+      </div>
+
+      <section
+        id="workflow"
+        class="workflow-section container"
+        aria-labelledby="workflow-title"
+      >
+        <div class="section-intro">
+          <h2 id="workflow-title">
+            A little less checking.<br />A little more focus.
+          </h2>
+          <p>
+            Let Claude work while you do. Blinkdock stays near the top of your
+            screen and expands when a session needs attention.
+          </p>
+        </div>
+        <div class="benefit-grid">
+          <article>
+            <span class="feature-icon"
+              ><span class="icon i-bell" aria-hidden="true"></span
+            ></span>
+            <h3>Catch the moments that matter</h3>
+            <p>
+              A permission request, a completed turn, an error. Color, motion,
+              and an optional chime make the change visible.
+            </p>
+          </article>
+          <article>
+            <span class="feature-icon"
+              ><span class="icon i-layers" aria-hidden="true"></span
+            ></span>
+            <h3>Keep every session in view</h3>
+            <p>
+              A single count opens your session list. The session that needs you
+              most takes priority on the widget.
+            </p>
+          </article>
+          <article>
+            <span class="feature-icon"
+              ><span class="icon i-terminal" aria-hidden="true"></span
+            ></span>
+            <h3>Return to the right terminal</h3>
+            <p>
+              Start Claude with the optional Windows Terminal launcher to link a
+              session to its own window.
+            </p>
+          </article>
+        </div>
+      </section>
+
+      <section class="detail-band" aria-labelledby="sessions-title">
+        <div class="container detail-row">
+          <div class="detail-copy">
+            <p class="section-label">Multiple sessions</p>
+            <h2 id="sessions-title">One place to see<br />what needs you.</h2>
+            <p>
+              Working on the API and the interface at the same time? Each
+              session keeps its own state. Open the list to see the project,
+              activity, and time since its last event.
+            </p>
+            <p class="detail-note">
+              Launcher-linked sessions can bring their exact terminal window
+              forward. Sessions started normally are still monitored.
+            </p>
+            <a
+              class="text-link"
+              href="https://github.com/benmaster82/Blinkdock#multiple-sessions-and-terminal-focus"
+              >Session setup<span class="icon i-arrow" aria-hidden="true"></span
+            ></a>
+          </div>
+          <figure class="product-figure sessions-figure">
+            <div class="figure-widget">
+              <img
+                src="images/widget-waiting.png"
+                width="378"
+                height="60"
+                loading="lazy"
+                alt="The widget gives priority to a session waiting for permission"
+              />
+            </div>
+            <img
+              class="sessions-image"
+              src="images/sessions.png"
+              width="334"
+              height="144"
+              loading="lazy"
+              alt="Session list with editor waiting for permission and api working"
+            />
+            <figcaption>Actual interface, sample sessions.</figcaption>
+          </figure>
+        </div>
+      </section>
+
+      <section
+        class="container detail-row files-row"
+        aria-labelledby="files-title"
+      >
+        <figure class="product-figure files-figure">
+          <img
+            src="images/file-activity.png"
+            width="430"
+            height="390"
+            loading="lazy"
+            alt="File activity panel separating three session edits from shared project Git status"
+          />
+          <figcaption>
+            Session edits and shared Git changes, kept distinct.
+          </figcaption>
+        </figure>
+        <div class="detail-copy">
+          <p class="section-label">File activity</p>
+          <h2 id="files-title">Follow the work<br />as it takes shape.</h2>
+          <p>
+            See the files touched by a session's successful Edit and Write
+            calls, alongside the current Git status of its project.
+          </p>
+          <div class="file-legend">
+            <span class="legend-letter edit">E</span
+            ><span>Direct edits, attributed to a session</span>
+          </div>
+          <div class="file-legend">
+            <span class="legend-letter modified">M</span
+            ><span>Shared changes across the project</span>
+          </div>
+          <p class="detail-note">
+            Git status refreshes only while the file panel is open. Changes made
+            through shell commands appear in Git status, without being
+            attributed to a particular session.
+          </p>
+        </div>
+      </section>
+
+      <section class="status-section" aria-labelledby="status-title">
+        <div class="container">
+          <div class="status-intro">
+            <h2 id="status-title">A signal for every<br />observable state.</h2>
+            <p>
+              Blinkdock reflects Claude Code's latest hook event. When events
+              stop arriving, it reports uncertainty.
+            </p>
+          </div>
+          <dl class="status-grid">
+            <div>
+              <dt><span class="status-dot gray"></span>Listening</dt>
+              <dd>Ready for a prompt.</dd>
+            </div>
+            <div>
+              <dt><span class="status-dot blue"></span>Working</dt>
+              <dd>A prompt or tool is active.</dd>
+            </div>
+            <div>
+              <dt><span class="status-dot amber"></span>Waiting for you</dt>
+              <dd>Your input is needed.</dd>
+            </div>
+            <div>
+              <dt><span class="status-dot green"></span>Done</dt>
+              <dd>The foreground turn ended.</dd>
+            </div>
+            <div>
+              <dt><span class="status-dot teal"></span>Background work</dt>
+              <dd>Background tasks were reported.</dd>
+            </div>
+            <div>
+              <dt><span class="status-dot red"></span>Error</dt>
+              <dd>A stop or API failure was reported.</dd>
+            </div>
+            <div>
+              <dt><span class="status-dot pale"></span>Status unknown</dt>
+              <dd>No recent event to rely on.</dd>
+            </div>
+            <div>
+              <dt><span class="status-dot gray"></span>Offline</dt>
+              <dd>No session is currently tracked.</dd>
+            </div>
+          </dl>
+          <p class="status-footnote">
+            Manual interruptions and some background events may not emit a
+            matching hook.
+            <a
+              href="https://github.com/benmaster82/Blinkdock#what-the-states-mean"
+              >Read the behavior and limits</a
+            >.
+          </p>
+        </div>
+      </section>
+
+      <section
+        class="install-section container"
+        id="install"
+        aria-labelledby="install-title"
+      >
+        <div class="install-copy">
+          <p class="section-label">Get started</p>
+          <h2 id="install-title">Give your sessions<br />a place on screen.</h2>
+          <p>
+            You'll need Windows 10 or 11, Python 3.10+, and an installed,
+            signed-in Claude Code CLI.
+          </p>
+          <ol class="install-steps">
+            <li>
+              <span>1</span>
+              <div>
+                <strong>Get the source</strong>
+                <p>Clone the repository or download the ZIP.</p>
+              </div>
+            </li>
+            <li>
+              <span>2</span>
+              <div>
+                <strong>Install the dependency</strong>
+                <p>Use the same Python installation to run Blinkdock.</p>
+              </div>
+            </li>
+            <li>
+              <span>3</span>
+              <div>
+                <strong>Run setup, then open Claude</strong>
+                <p>
+                  Start a new session with your usual
+                  <code>claude</code> command.
+                </p>
+              </div>
+            </li>
+          </ol>
+          <a
+            class="text-link"
+            href="https://github.com/benmaster82/Blinkdock#other-ways-to-run"
+            >Manual and project-only installation<span
+              class="icon i-arrow"
+              aria-hidden="true"
+            ></span
+          ></a>
+        </div>
+        <div class="install-instructions">
+          <div class="command-box">
+            <div class="command-header">
+              <span
+                ><span class="icon i-terminal" aria-hidden="true"></span
+                >PowerShell</span
+              ><button
+                class="icon-button"
+                type="button"
+                id="copy-install"
+                aria-label="Copy installation commands"
+                title="Copy installation commands"
+              >
+                <span class="icon i-copy" aria-hidden="true"></span>
+              </button>
+            </div>
+            <pre
+              tabindex="0"
+              aria-label="PowerShell installation commands"
+            ><code id="install-commands">git clone https://github.com/benmaster82/Blinkdock.git
+cd Blinkdock
+python -m pip install -r requirements.txt
+python setup.py</code></pre>
+            <p
+              class="copy-feedback"
+              id="copy-feedback"
+              role="status"
+              aria-live="polite"
+            ></p>
+          </div>
+          <p class="setup-note">
+            Setup installs global Claude Code hooks, enables launch at Windows
+            sign-in, and starts the widget. Existing Claude settings are
+            preserved and backed up.
+          </p>
+          <details class="zip-instructions">
+            <summary>
+              Prefer a ZIP download?<span
+                class="icon i-chevron"
+                aria-hidden="true"
+              ></span>
+            </summary>
+            <div>
+              <p>
+                Extract the ZIP, open PowerShell in that folder, and run
+                <code>python -m pip install -r requirements.txt</code>. Then
+                double-click <code>Install.cmd</code>.
+              </p>
+              <a
+                class="button secondary"
+                href="https://github.com/benmaster82/Blinkdock/archive/refs/heads/main.zip"
+                ><span class="icon i-download" aria-hidden="true"></span
+                >Download source ZIP</a
+              >
+            </div>
+          </details>
+          <p class="source-note">
+            Distributed as Python source. No packaged Windows installer yet.
+          </p>
+        </div>
+      </section>
+
+      <section class="faq-section" aria-labelledby="faq-title">
+        <div class="container faq-layout">
+          <div>
+            <h2 id="faq-title">A few good<br />questions.</h2>
+            <p>
+              More detail in the
+              <a href="https://github.com/benmaster82/Blinkdock#readme"
+                >documentation</a
+              >.
+            </p>
+          </div>
+          <div class="faq-list">
+            <details>
+              <summary>
+                Can I approve a request from the widget?<span
+                  class="icon i-chevron"
+                  aria-hidden="true"
+                ></span>
+              </summary>
+              <p>
+                Approvals and replies happen in the Claude Code terminal.
+                Blinkdock shows when you're needed and can bring a
+                launcher-linked session's terminal forward.
+              </p>
+            </details>
+            <details>
+              <summary>
+                Does it need an API key or another account?<span
+                  class="icon i-chevron"
+                  aria-hidden="true"
+                ></span>
+              </summary>
+              <p>
+                Blinkdock uses local hook events from your existing Claude Code
+                installation. It doesn't need its own API key or account, and it
+                doesn't send your session status to a server.
+              </p>
+            </details>
+            <details>
+              <summary>
+                Does it run Git while Claude is working?<span
+                  class="icon i-chevron"
+                  aria-hidden="true"
+                ></span>
+              </summary>
+              <p>
+                The hooks write small local records. Git status runs
+                asynchronously only when you open the file panel, roughly every
+                two seconds. Hook execution still has some overhead; Blinkdock
+                does not claim zero performance impact.
+              </p>
+            </details>
+            <details>
+              <summary>
+                Can I use it on macOS, Linux, or with other agents?<span
+                  class="icon i-chevron"
+                  aria-hidden="true"
+                ></span>
+              </summary>
+              <p>
+                The supported setup is local Claude Code CLI sessions on
+                Windows. Terminal focus, autostart, and notification sounds are
+                Windows-specific. Other coding agents and Claude's web or
+                desktop app are not currently supported.
+              </p>
+            </details>
+            <details>
+              <summary>
+                How do I remove it?<span
+                  class="icon i-chevron"
+                  aria-hidden="true"
+                ></span>
+              </summary>
+              <p>
+                Run <code>Uninstall.cmd</code> or
+                <code>python setup.py uninstall</code>. This removes Blinkdock's
+                global hooks and autostart entry and stops the widget. Hooks
+                installed for individual projects need to be removed separately.
+                Local preferences are kept.
+              </p>
+            </details>
+          </div>
+        </div>
+      </section>
+
+      <section class="closing container" aria-label="Get Blinkdock">
+        <img
+          src="images/widget-listening.png"
+          width="220"
+          height="52"
+          loading="lazy"
+          alt="Blinkdock in its compact Listening state"
+        />
+        <h2>Stay in flow.</h2>
+        <p>Know when Claude needs you.</p>
+        <a class="button primary" href="#install"
+          ><span class="icon i-download" aria-hidden="true"></span>Get
+          Blinkdock</a
+        >
+      </section>
+    </main>
+
+    <footer class="site-footer container">
+      <div class="footer-top">
+        <a class="brand" href="#">Blinkdock</a>
+        <nav aria-label="Footer navigation">
+          <a href="https://github.com/benmaster82/Blinkdock">GitHub</a
+          ><a href="https://github.com/benmaster82/Blinkdock/issues"
+            >Report an issue</a
+          ><a href="https://github.com/benmaster82/Blinkdock/blob/main/LICENSE"
+            >MIT license</a
+          >
+        </nav>
+      </div>
+      <div class="footer-bottom">
+        <p>
+          Built by <a href="https://github.com/benmaster82">benmaster82</a>.
+          Open for contributions.
+        </p>
+        <p>
+          An independent project. Not affiliated with or endorsed by
+          Anthropic.<br />Claude and Claude Code are trademarks of Anthropic.
+        </p>
+      </div>
+    </footer>
+  </body>
+</html>

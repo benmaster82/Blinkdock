@@ -4,16 +4,17 @@ from __future__ import annotations
 import os
 import shutil
 import sys
+import tempfile
 import time
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 os.environ['QT_QPA_PLATFORM'] = 'offscreen'
+os.environ['QT_SCALE_FACTOR'] = '2'
 os.environ['QT_QPA_FONTDIR'] = str(Path(os.environ.get('WINDIR', 'C:/Windows')) / 'Fonts')
-os.environ['LOCALAPPDATA'] = str(ROOT / 'docs')
-RUNTIME = ROOT / 'docs' / 'claude-island'
-RUNTIME.mkdir(exist_ok=False)
+RUNTIME = Path(tempfile.mkdtemp(prefix='blinkdock-previews-'))
+os.environ['LOCALAPPDATA'] = str(RUNTIME)
 
 try:
     from PySide6.QtWidgets import QApplication
@@ -49,6 +50,8 @@ try:
     capture(island, 'widget-working.png')
     island.set_state('waiting', 'editor - permission needed', animate=False)
     capture(island, 'widget-waiting.png')
+    island.set_state('done', 'editor - turn complete', animate=False)
+    capture(island, 'widget-done.png')
 
     cwd = str(ROOT)
     island._sessions_snapshot = [
@@ -83,6 +86,6 @@ try:
     island.close()
     app.quit()
 finally:
-    if RUNTIME.resolve().parent != (ROOT / 'docs').resolve():
-        raise RuntimeError('Preview data path escaped the repository')
+    if RUNTIME.resolve().parent != Path(tempfile.gettempdir()).resolve():
+        raise RuntimeError('Preview data path escaped the temporary directory')
     shutil.rmtree(RUNTIME)

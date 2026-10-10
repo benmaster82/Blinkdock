@@ -4,6 +4,8 @@
 
 <p align="center"><em>Stay in flow. Know when Claude needs you.</em></p>
 
+<p align="center"><a href="https://benmaster82.github.io/Blinkdock/">Website and interactive preview</a></p>
+
 Blinkdock shows when Claude Code is working, waiting for you, finished, or in an error state. It can track several sessions at once, open the right terminal when a session was started with its launcher, and show which files a session edited. Claude Code continues to run in your terminal; the widget observes its hooks and does not replace the CLI. It currently supports local Claude Code CLI sessions on Windows, not other agents or Claude's web/desktop sessions. The application still uses its former Claude Island name in some commands and data paths while the rebrand is in progress.
 
 The project is currently distributed as Python source, not as a packaged Windows installer. It does **not** let you approve permissions or type responses inside the widget: return to the terminal to do that.
@@ -153,6 +155,8 @@ Supported waiting notifications include permission prompts, MCP dialogs, agent i
 | `setup.py`, `install_autostart.py`, `launch_claude.py` | Installation, sign-in startup, and linked session launcher. |
 
 Tests: `python -m unittest discover -s tests -q`. Documentation previews can be regenerated with `python tools/render_readme_previews.py`; that script uses isolated sample data and does not connect to live Claude sessions.
+
+The landing page is a buildless static site in `docs/index.html`, published by GitHub Pages from `main` / `docs`. Open that file locally to preview changes; styles and interactions live in `docs/site`. Fonts, icons, and their license notices are bundled in `docs/site/assets`.
 
 ## Troubleshooting
 
