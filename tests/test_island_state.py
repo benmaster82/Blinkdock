@@ -10,6 +10,7 @@ from unittest import mock
 
 os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
+from PySide6.QtCore import QPointF
 from PySide6.QtWidgets import QApplication, QLabel
 
 import island
@@ -104,18 +105,21 @@ class StateTests(unittest.TestCase):
             widget = island.Island()
         try:
             widget._poll.stop()
+            token = 'a1b2c3d4e5f60708'
             widget._sessions_snapshot = [
                 {'id': 'abcdef1234', 'state': 'waiting', 'project': 'repo',
-                 'detail': 'approval', 'ts': time.time()},
+                 'detail': 'approval', 'ts': time.time(), 'launch_id': token},
                 {'id': '9876543210', 'state': 'unknown', 'project': 'repo',
-                 'detail': '', 'ts': time.time() - 3700},
+                 'detail': '', 'ts': time.time() - 3700, 'launch_id': ''},
             ]
             widget._session_count = 2
             widget.set_state('waiting', 'repo · approval', animate=False)
             widget.show()
             app.processEvents()
             self.assertLessEqual(widget._badge_rect().right(), widget.width())
-            widget._show_sessions_menu()
+            with mock.patch.object(island, 'find_session_terminal',
+                                   side_effect=lambda value: 42 if value == token else None):
+                widget._show_sessions_menu()
             app.processEvents()
             menu = widget._sessions_menu
             self.assertIsNotNone(menu)
@@ -127,7 +131,19 @@ class StateTests(unittest.TestCase):
                                 for label in rows[0].findChildren(QLabel)))
             self.assertTrue(any(label.text() == '98765432'
                                 for label in rows[1].findChildren(QLabel)))
+            self.assertIsInstance(rows[0], island.SessionRow)
+            self.assertNotIsInstance(rows[1], island.SessionRow)
+            with mock.patch.object(island, 'raise_session_terminal', return_value=True) as focus:
+                rows[0].clicked.emit(token)
+            focus.assert_called_once_with(token)
             menu.close()
+            widget._drag_offset = QPointF(0, 0)
+            widget._moved = False
+            with mock.patch.object(widget, '_show_sessions_menu') as show, \
+                 mock.patch.object(widget, '_focus_claude') as generic:
+                widget.mouseReleaseEvent(SimpleNamespace(position=lambda: QPointF(75, 26)))
+            show.assert_called_once()
+            generic.assert_not_called()
         finally:
             widget.close()
 

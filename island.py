@@ -14,16 +14,18 @@ import time
 from pathlib import Path
 
 from PySide6.QtCore import (Property, QEasingCurve, QLockFile, QPoint, QPointF,
-                            QPropertyAnimation, QRectF, Qt, QTimer)
+                            QPropertyAnimation, QRectF, Signal, Qt, QTimer)
 from PySide6.QtGui import (QAction, QColor, QFont, QFontMetrics, QIcon, QPainter,
                            QPainterPath, QPixmap)
-from PySide6.QtWidgets import (QApplication, QHBoxLayout, QLabel, QMenu,
-                               QSystemTrayIcon, QVBoxLayout, QWidget, QWidgetAction)
+from PySide6.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLabel, QMenu,
+                               QSystemTrayIcon, QVBoxLayout,
+                               QWidget, QWidgetAction)
 
 from config import (DEFAULT_STATE, STATES, load_settings, load_terminal_hwnd,
                     save_settings, sessions_dir, settings_path)
 from hook_bridge import write_session
-from winfocus import find_terminals, raise_hwnd, raise_window
+from winfocus import (find_session_terminal, find_terminals, raise_hwnd,
+                      raise_session_terminal, raise_window)
 
 # When several sessions run at once, the island shows the most urgent one.
 PRIORITY = {'offline': 0, 'idle': 1, 'unknown': 2, 'background': 3,
@@ -54,6 +56,24 @@ def effective_state(state: str, age: float, working_timeout: float) -> str:
     if state in ('idle', 'waiting', 'error', 'background') and age > 3600:
         return 'unknown'
     return state
+
+
+class SessionRow(QFrame):
+    clicked = Signal(str)
+
+    def __init__(self, launch_id: str, parent: QWidget) -> None:
+        super().__init__(parent)
+        self.launch_id = launch_id
+        self.setCursor(Qt.PointingHandCursor)
+        self.setStyleSheet('''
+            SessionRow { background: transparent; border: 0; }
+            SessionRow:hover { background: #303740; }
+        ''')
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802
+        if event.button() == Qt.LeftButton and self.rect().contains(event.position().toPoint()):
+            self.clicked.emit(self.launch_id)
+        super().mouseReleaseEvent(event)
 
 
 class Island(QWidget):
@@ -247,7 +267,8 @@ class Island(QWidget):
             state = effective_state(state, age, timeout)
             sessions.append({'id': file.stem, 'state': state,
                              'detail': str(data.get('detail', '')),
-                             'project': str(data.get('project', '')), 'ts': ts})
+                             'project': str(data.get('project', '')), 'ts': ts,
+                             'launch_id': str(data.get('launch_id', ''))})
         return sessions
 
     def _read_sessions(self) -> None:
@@ -314,8 +335,13 @@ class Island(QWidget):
             project = session['project'] or 'Unnamed session'
             project_counts[project] = project_counts.get(project, 0) + 1
         for session in self._sessions_snapshot:
-            row = QWidget(menu)
+            launch_id = session.get('launch_id', '')
+            focusable = bool(find_session_terminal(launch_id))
+            row = SessionRow(launch_id, menu) if focusable else QWidget(menu)
             row.setFixedWidth(332)
+            if focusable:
+                row.setAccessibleName(f'Open {session["project"] or "unnamed"} session')
+                row.clicked.connect(self._focus_session)
             layout = QHBoxLayout(row)
             layout.setContentsMargins(14, 7, 14, 7)
             layout.setSpacing(10)
@@ -329,8 +355,10 @@ class Island(QWidget):
             project = session['project'] or 'Unnamed session'
             title_row = QHBoxLayout()
             title_row.setSpacing(6)
+            title_width = (165 if focusable else 190) if project_counts[project] > 1 else (
+                235 if focusable else 270)
             title = QLabel(QFontMetrics(QFont('Segoe UI', 9, QFont.DemiBold)).elidedText(
-                project, Qt.ElideRight, 190 if project_counts[project] > 1 else 270), row)
+                project, Qt.ElideRight, title_width), row)
             title.setStyleSheet('color: #f0f3f6; font-weight: 600;')
             title_row.addWidget(title)
             if project_counts[project] > 1:
@@ -349,7 +377,7 @@ class Island(QWidget):
             summary_row = QHBoxLayout()
             summary_row.setSpacing(6)
             subtitle = QLabel(QFontMetrics(QFont('Segoe UI', 8)).elidedText(
-                status, Qt.ElideRight, 200), row)
+                status, Qt.ElideRight, 175 if focusable else 200), row)
             subtitle.setStyleSheet('color: #aeb6c0;')
             summary_row.addWidget(subtitle, 1)
             age_label = QLabel(last_event, row)
@@ -358,6 +386,17 @@ class Island(QWidget):
             labels.addLayout(summary_row)
             subtitle.setToolTip(f'{status} · last event {last_event}')
             layout.addLayout(labels)
+            if focusable:
+                arrow = QLabel('›', row)
+                arrow.setFont(QFont('Segoe UI', 16))
+                arrow.setStyleSheet('color: #b8c2ce;')
+                arrow.setFixedWidth(14)
+                layout.addWidget(arrow, 0, Qt.AlignVCenter)
+                for label in row.findChildren(QLabel):
+                    label.setAttribute(Qt.WA_TransparentForMouseEvents)
+                row.setToolTip(f'Open exact terminal for {project} · {session["id"]}')
+            else:
+                row.setToolTip('Exact focus unavailable; start Claude with launch_claude.py')
             action = QWidgetAction(menu)
             action.setDefaultWidget(row)
             menu.addAction(action)
@@ -373,6 +412,14 @@ class Island(QWidget):
         if y + menu.height() > area.bottom() + 1:
             y = self.y() - menu.height() - 6
         menu.popup(QPoint(x, y))
+
+    def _focus_session(self, launch_id: str) -> bool:
+        if raise_session_terminal(launch_id):
+            if self._sessions_menu is not None:
+                QTimer.singleShot(0, self._sessions_menu.close)
+            return True
+        QTimer.singleShot(0, self._show_sessions_menu)
+        return False
 
     # --- painting ------------------------------------------------------------
     def _load_avatar(self) -> QPixmap | None:
@@ -498,6 +545,10 @@ class Island(QWidget):
         if self._drag_offset is not None and not self._moved:
             if self._badge_rect().contains(event.position()):
                 self._show_sessions_menu()
+            elif self._session_count > 1:
+                self._show_sessions_menu()
+            elif self._sessions_snapshot and self._sessions_snapshot[0].get('launch_id'):
+                self._focus_session(self._sessions_snapshot[0]['launch_id'])
             else:
                 self._focus_claude()
         elif self._moved:

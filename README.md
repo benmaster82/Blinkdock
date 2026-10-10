@@ -64,7 +64,9 @@ driven by `QPropertyAnimation`. Compact states keep a short text label visible.
 - Claude Code CLI (`claude`) installed and logged in
 - Windows Terminal (`wt.exe`) recommended, for reliable click-to-focus
 
-The avatar in `assets/clawd.png` is reused from the Trialogo project.
+The avatar in `assets/clawd.png` is a rasterized version of LobeHub Icons' Claude Code (Clawd) icon. The icon is licensed under the MIT License; see [`assets/LICENSE.lobehub`](assets/LICENSE.lobehub). Source: [LobeHub Icons](https://github.com/lobehub/lobe-icons/blob/master/packages/static-svg/icons/claudecode.svg).
+
+Claude and Claude Code are trademarks of Anthropic. This project is independent and is not affiliated with or endorsed by Anthropic.
 
 ---
 
@@ -116,8 +118,8 @@ use Claude Code. Behaviour that makes it a tool, not a demo:
 
 - **Waiting → a soft chime** alerts you even if the terminal is in the background
   (toggle with the `chime` key in `settings.json`).
-- **Click the island → the Claude terminal comes to the front** (see
-  *Click-to-focus* below).
+- **Click the island → open the session list when several are tracked**; with
+  one launcher-linked session, focus its exact terminal (see *Click-to-focus*).
 - **Click the number on the island → inspect all tracked sessions**, each with
   its project, state, and time since the last observed event.
 - **Single instance**: re-launching never creates a second island.
@@ -192,25 +194,24 @@ matchers still select notification states but session labels fall back to defaul
 
 ## Click-to-focus
 
-Clicking the body of the island raises the terminal Claude runs in; clicking the
-session count opens the session list. Window titles are
-unreliable (Claude rewrites the tab title to your first prompt), so matching is
-layered, most precise first:
+The session list has an arrow on rows whose exact Windows Terminal window can be
+identified. Click that row to focus its terminal. The optional launcher opens a
+dedicated window with a pinned, unique title and passes its launch ID to Claude;
+the hooks attach that ID to the session state. A row is clickable only while
+exactly one visible Windows Terminal window matches its launch ID. This avoids
+switching to the wrong project when several sessions share a name.
 
-1. **Exact window handle** recorded by `launch_claude.py` when it opened the
-   terminal (stored in `terminal.json`). Validated with `IsWindow`; stale handles
-   are skipped.
-2. **Windows Terminal window class** (`CASCADIA_HOSTING_WINDOW_CLASS`) — raises a
-   Windows Terminal window regardless of its title; top of the Z-order first.
-3. **Title substring** (`focus_title`, default `Claude Code`), with File Explorer
-   and shell windows excluded so a folder named "claude-…" never matches.
-
-For the most precise focus, launch Claude via the optional launcher, which records
-the exact window:
+To enable exact focus for a session, open it with the launcher:
 
 ```powershell
 python launch_claude.py C:\path\to\project
 ```
+
+Sessions started normally with `claude` are still monitored, but their rows have
+no exact-focus action. Clicking the pill body with several sessions opens the
+list instead of guessing which terminal to raise. With a single unlinked
+session, the older best-effort terminal focus remains: last recorded launcher
+window, then a Windows Terminal window, then a configured title match.
 
 ---
 
@@ -249,7 +250,8 @@ amber for the waiting one. It labels the pill with that session's **project**
 (the working directory's name). A dedicated number shows how many sessions are
 tracked; click it for a status list sorted by urgency. `unknown` sessions still
 appear in the count but are clearly marked because their activity cannot be
-confirmed. The chime fires whenever a *new* session starts waiting, even if the
+confirmed. Launcher-linked rows can open their exact terminal. The chime fires
+whenever a *new* session starts waiting, even if the
 island was already amber for another. A silent `working` session becomes
 `unknown` after `working_timeout`; `waiting`, `error`, and `background` become
 `unknown` after an hour, as does an inactive `idle` session. A `done` flash
@@ -290,9 +292,9 @@ autostart, and stops the island. The `claude` command is never affected.
 
 - **Single agent (Claude Code).** Codex and other agents have no equivalent hooks;
   they would need a coarser state (running / stopped) or a wrapped process.
-- **One terminal recorded for click-to-focus.** With several sessions, clicking
-  the island raises the recorded/top Windows Terminal, not necessarily the exact
-  session shown. Per-session focus is a possible refinement.
+- **Manual sessions cannot be focused exactly.** Claude Code's hook payload
+  identifies the session but not its terminal window. Use `launch_claude.py` for
+  exact focus; without Windows Terminal, the launcher cannot create the link.
 - **`working` is one level.** Finer detail ("runs a command", "edits a file")
   comes from `PreToolUse` only when stdin is available to the hook.
 - **Interrupts and manual permission denial.** Claude Code does not emit a

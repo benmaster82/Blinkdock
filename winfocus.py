@@ -6,10 +6,12 @@ exact window it opened and the island raises that handle; class- and title-based
 lookups are only fallbacks. Windows-only; a no-op elsewhere.
 """
 from __future__ import annotations
+import re
 import sys
 
 # Windows Terminal's top-level window class (stable across titles).
 TERMINAL_CLASS = 'CASCADIA_HOSTING_WINDOW_CLASS'
+LAUNCH_ID_PATTERN = re.compile(r'[0-9a-f]{16}\Z')
 # Never raise the desktop, the taskbar, or a File Explorer window.
 EXCLUDED_CLASSES = {'CabinetWClass', 'ExploreWClass', 'Progman', 'WorkerW',
                     'Shell_TrayWnd', 'Shell_SecondaryTrayWnd', 'Windows.UI.Core.CoreWindow'}
@@ -49,13 +51,32 @@ def raise_hwnd(hwnd: int | None) -> bool:
     if not user32.IsWindow(hwnd) or not user32.IsWindowVisible(hwnd):
         return False
     user32.ShowWindow(hwnd, 9)  # SW_RESTORE
-    user32.SetForegroundWindow(hwnd)
-    return True
+    return bool(user32.SetForegroundWindow(hwnd))
 
 
 def find_terminals() -> list[int]:
     """Visible Windows Terminal windows, top of the Z-order first."""
     return _enumerate(lambda _h, cls, _t: cls == TERMINAL_CLASS)
+
+
+def terminal_title(launch_id: str) -> str:
+    if not LAUNCH_ID_PATTERN.fullmatch(launch_id):
+        raise ValueError('Invalid Claude Island launch ID')
+    return f'Claude Code [{launch_id}]'
+
+
+def find_session_terminal(launch_id: str) -> int | None:
+    """Return a window only when its pinned launch title identifies it uniquely."""
+    if not LAUNCH_ID_PATTERN.fullmatch(launch_id):
+        return None
+    marker = terminal_title(launch_id)
+    matches = _enumerate(lambda _h, cls, title: cls == TERMINAL_CLASS
+                         and marker in title)
+    return matches[0] if len(matches) == 1 else None
+
+
+def raise_session_terminal(launch_id: str) -> bool:
+    return raise_hwnd(find_session_terminal(launch_id))
 
 
 def raise_window(substring: str) -> bool:

@@ -11,6 +11,7 @@ sessions never clobber each other; the island aggregates them. Writing is atomic
 """
 from __future__ import annotations
 import json
+import os
 import re
 import sys
 import time
@@ -72,15 +73,19 @@ def state_for_event(state: str, event: dict) -> str | None:
     return state
 
 
-def write_session(state: str, detail: str = '', session_id: str = 'default', project: str = '') -> None:
+def write_session(state: str, detail: str = '', session_id: str = 'default',
+                  project: str = '', launch_id: str = '') -> None:
     if state not in STATES:
         state = 'idle'
     path = sessions_dir() / (safe_id(session_id) + '.json')
     if state == 'offline':
         path.unlink(missing_ok=True)  # the session ended: forget it
         return
-    payload = json.dumps({'state': state, 'detail': detail[:200],
-                          'project': project[:60], 'ts': time.time()}, ensure_ascii=False)
+    data = {'state': state, 'detail': detail[:200],
+            'project': project[:60], 'ts': time.time()}
+    if re.fullmatch(r'[0-9a-f]{16}', launch_id):
+        data['launch_id'] = launch_id
+    payload = json.dumps(data, ensure_ascii=False)
     temporary = path.with_name(path.name + '.' + uuid.uuid4().hex + '.tmp')
     temporary.write_text(payload, encoding='utf-8')
     temporary.replace(path)
@@ -95,7 +100,11 @@ def main() -> None:
     session_id = str(event.get('session_id') or 'default')
     cwd = str(event.get('cwd') or '')
     project = Path(cwd).name if cwd else ''
-    write_session(state, detail_for(state, event), session_id, project)
+    launch_id = os.environ.get('CLAUDE_ISLAND_LAUNCH_ID', '')
+    if re.fullmatch(r'[0-9a-f]{16}', launch_id):
+        write_session(state, detail_for(state, event), session_id, project, launch_id)
+    else:
+        write_session(state, detail_for(state, event), session_id, project)
 
 
 if __name__ == '__main__':

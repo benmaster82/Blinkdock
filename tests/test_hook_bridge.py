@@ -1,4 +1,5 @@
 import json
+import os
 import sys
 import unittest
 import uuid
@@ -66,6 +67,24 @@ class NotificationTests(unittest.TestCase):
 
 
 class LifecycleTests(unittest.TestCase):
+    def test_launcher_id_is_attached_only_when_valid(self):
+        event = {'hook_event_name': 'SessionStart', 'session_id': 'launched',
+                 'cwd': 'C:/work/project'}
+        session_id = 'launch-' + uuid.uuid4().hex
+        event['session_id'] = session_id
+        path = Path(__file__).parent / f'{session_id}.json'
+        self.addCleanup(lambda: path.unlink(missing_ok=True))
+        with mock.patch.object(hook_bridge, 'sessions_dir', return_value=path.parent), \
+             mock.patch.object(hook_bridge, 'read_event', return_value=event), \
+             mock.patch.object(sys, 'argv', ['hook_bridge.py', 'idle']):
+            with mock.patch.dict(os.environ, {'CLAUDE_ISLAND_LAUNCH_ID': 'a1b2c3d4e5f60708'}):
+                hook_bridge.main()
+            self.assertEqual(json.loads(path.read_text(encoding='utf-8'))['launch_id'],
+                             'a1b2c3d4e5f60708')
+            with mock.patch.dict(os.environ, {'CLAUDE_ISLAND_LAUNCH_ID': '../wrong'}):
+                hook_bridge.main()
+            self.assertNotIn('launch_id', json.loads(path.read_text(encoding='utf-8')))
+
     def test_session_transitions_and_end(self):
         session_id = 'test-' + uuid.uuid4().hex
         path = Path(__file__).parent / f'{session_id}.json'
